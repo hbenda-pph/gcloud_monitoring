@@ -207,94 +207,71 @@ def get_tables_from_metadata():
 
 # ========== PASO 3: OBTENER MAX(_etl_synced) POR TABLA ==========
 
-def get_last_sync_timestamp(project_id, table_name):
+def get_last_sync_timestamp(project_id, table_name, debug_mode=False):
     """
     Obtiene el MAX(_etl_synced) de una tabla Bronze en un proyecto específico.
+    Usa exactamente la misma query que funciona en BigQuery Studio.
     
     Args:
         project_id: ID del proyecto de BigQuery (ej: "company-project-123")
-        table_name: Nombre de la tabla en dataset 'bronze' (ej: "jobs")
+        table_name: Nombre de la tabla en dataset 'bronze' (ej: "business_unit")
+        debug_mode: Si es True, captura y retorna información de errores
         
     Retorna:
         datetime con el último timestamp de sincronización, o None si no existe
     """
+    error_info = None
     try:
+        # Crear cliente BigQuery con el project_id correcto
         client = bigquery.Client(project=project_id)
-        dataset_id = "bronze"
-        table_ref = f"{project_id}.{dataset_id}.{table_name}"
         
-        # Verificar si la tabla existe
-        try:
-            table = client.get_table(table_ref)
-        except NotFound:
-            # Tabla no existe
-            return None
-        except Exception as e:
-            # Error de permisos u otro error
-            return None
-        
-        # Verificar que la tabla tenga filas
-        count_query = f"""
-            SELECT COUNT(*) as row_count
-            FROM `{table_ref}`
-        """
-        
-        try:
-            count_result = client.query(count_query).to_dataframe()
-            if count_result.empty or count_result.iloc[0]['row_count'] == 0:
-                # Tabla existe pero está vacía
-                return None
-        except Exception:
-            # Si no podemos contar, intentamos igual con MAX
-            pass
-        
-        # Obtener MAX(_etl_synced) - usar COALESCE para manejar NULLs
+        # Query exacta que funciona en BigQuery Studio
+        # Formato: `project_id.dataset.table_name`
+        table_ref = f"{project_id}.bronze.{table_name}"
         query = f"""
             SELECT MAX(_etl_synced) as max_sync
             FROM `{table_ref}`
             WHERE _etl_synced IS NOT NULL
         """
         
-        try:
-            result = client.query(query).to_dataframe()
-            
-            # Verificar que tenemos resultados
-            if result.empty:
-                return None
-            
-            max_sync_value = result.iloc[0]['max_sync']
-            
-            # Si es None o NaN, la tabla no tiene valores en _etl_synced
-            if max_sync_value is None or pd.isna(max_sync_value):
-                return None
-            
-            # Convertir a datetime
-            return pd.to_datetime(max_sync_value)
-            
-        except Exception as query_error:
-            # Error en la query - puede ser que el campo no exista o error de permisos
-            # Intentar una query alternativa para verificar si el campo existe
-            try:
-                # Query para verificar estructura de la tabla
-                schema_check = f"""
-                    SELECT column_name 
-                    FROM `{project_id}.{dataset_id}.INFORMATION_SCHEMA.COLUMNS`
-                    WHERE table_name = '{table_name}' 
-                      AND column_name = '_etl_synced'
-                """
-                schema_result = client.query(schema_check).to_dataframe()
-                if schema_result.empty:
-                    # El campo _etl_synced no existe en esta tabla
-                    return None
-            except:
-                pass
-            
-            # Si llegamos aquí, hubo un error pero no sabemos exactamente qué
+        # Ejecutar query
+        query_job = client.query(query)
+        result = query_job.to_dataframe()
+        
+        # Verificar resultado
+        if result.empty:
+            if debug_mode:
+                error_info = f"Query ejecutada pero resultado vacío: {table_ref}"
             return None
         
-    except Exception as e:
-        # Error general (permisos, conexión, etc.)
+        max_sync_value = result.iloc[0]['max_sync']
+        
+        # Si es None o NaN, retornar None
+        if max_sync_value is None or pd.isna(max_sync_value):
+            if debug_mode:
+                error_info = f"Query ejecutada pero max_sync es NULL: {table_ref}"
+            return None
+        
+        # Convertir a datetime y retornar
+        return pd.to_datetime(max_sync_value)
+        
+    except NotFound as e:
+        # Tabla no existe
+        if debug_mode:
+            error_info = f"Tabla no encontrada: {project_id}.bronze.{table_name} - {str(e)}"
+            return None, error_info
         return None
+    except Exception as e:
+        # Cualquier otro error (permisos, campo no existe, etc.)
+        if debug_mode:
+            error_info = f"Error en {project_id}.bronze.{table_name}: {str(e)}"
+            return None, error_info
+        return None
+    
+    # Si hay error_info y debug_mode, retornarlo junto con None
+    if debug_mode and error_info:
+        return None, error_info
+    return None
 
 # ========== PASO 4: CONSTRUIR MATRIZ ==========
 
@@ -336,13 +313,17 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
         # Iterar sobre cada TABLA (serán las COLUMNAS de la matriz)
         for table_name in tables_list:
             # Obtener último timestamp de sincronización
-            last_sync = get_last_sync_timestamp(project_id, table_name)
-            row_data[table_name] = last_sync
+            result = get_last_sync_timestamp(project_id, table_name, debug_mode=debug_mode)
             
-            # Si es None y debug_mode, registrar el error
-            if last_sync is None and debug_mode:
-                table_ref = f"{project_id}.bronze.{table_name}"
-                error_log.append(f"{company_name} - {table_name} ({table_ref}): No se pudo obtener MAX(_etl_synced)")
+            # Manejar resultado (puede ser tuple si debug_mode está activo)
+            if isinstance(result, tuple):
+                last_sync, error_msg = result
+                if error_msg:
+                    error_log.append(f"{company_name} - {table_name}: {error_msg}")
+            else:
+                last_sync = result
+            
+            row_data[table_name] = last_sync
             
             # Actualizar progreso
             current_cell += 1
