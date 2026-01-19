@@ -70,17 +70,17 @@ case "$ENVIRONMENT" in
     dev)
         PROJECT_ID="platform-partners-des"
         SERVICE_NAME="etl-monitor-dashboard-dev"
-        SERVICE_ACCOUNT="streamlit-bigquery-sa@platform-partners-des.iam.gserviceaccount.com"
+        SERVICE_ACCOUNT="etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
         ;;
     qua)
         PROJECT_ID="platform-partners-qua"
         SERVICE_NAME="etl-monitor-dashboard-qua"
-        SERVICE_ACCOUNT="streamlit-bigquery-sa@platform-partners-qua.iam.gserviceaccount.com"
+        SERVICE_ACCOUNT="etl-servicetitan@platform-partners-qua.iam.gserviceaccount.com"
         ;;
     pro)
         PROJECT_ID="constant-height-455614-i0"
         SERVICE_NAME="etl-monitor-dashboard"
-        SERVICE_ACCOUNT="streamlit-bigquery-sa@constant-height-455614-i0.iam.gserviceaccount.com"
+        SERVICE_ACCOUNT="etl-servicetitan@constant-height-455614-i0.iam.gserviceaccount.com"
         ;;
 esac
 

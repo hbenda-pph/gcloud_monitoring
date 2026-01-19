@@ -9,8 +9,6 @@ import pandas as pd
 from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
-from google.auth import default
-from google.auth import impersonated_credentials
 import os
 
 # ========== CONFIGURACIÓN ==========
@@ -144,43 +142,16 @@ def get_current_environment():
 
 def get_bigquery_client(project_id):
     """
-    Crea un cliente BigQuery usando la cuenta de servicio correcta.
+    Crea un cliente BigQuery.
+    La cuenta de servicio se configura a nivel de Cloud Run, no aquí.
     
     Args:
         project_id: ID del proyecto de BigQuery
         
     Retorna:
-        Cliente BigQuery configurado con la cuenta de servicio
+        Cliente BigQuery
     """
-    try:
-        # Obtener credenciales por defecto
-        credentials, _ = default()
-        
-        # Determinar la cuenta de servicio según el ambiente
-        env = detect_environment()
-        if env == "dev":
-            service_account = "etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
-        elif env == "qua":
-            service_account = "etl-servicetitan@platform-partners-qua.iam.gserviceaccount.com"
-        elif env == "pro":
-            service_account = "etl-servicetitan@constant-height-455614-i0.iam.gserviceaccount.com"
-        else:
-            service_account = "etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
-        
-        # Crear credenciales impersonadas
-        target_credentials = impersonated_credentials.Credentials(
-            source_credentials=credentials,
-            target_principal=service_account,
-            target_scopes=['https://www.googleapis.com/auth/bigquery', 'https://www.googleapis.com/auth/cloud-platform']
-        )
-        
-        # Crear cliente con las credenciales impersonadas
-        client = bigquery.Client(project=project_id, credentials=target_credentials)
-        return client
-        
-    except Exception:
-        # Si falla la impersonación, usar cliente por defecto
-        return bigquery.Client(project=project_id)
+    return bigquery.Client(project=project_id)
 
 # ========== PASO 1: OBTENER COMPAÑÍAS ==========
 
