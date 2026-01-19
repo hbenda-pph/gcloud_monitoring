@@ -20,6 +20,12 @@ if [ -n "$1" ]; then
     ENVIRONMENT="$1"
     ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')  # Convertir a minúsculas
     
+    # Validar ambiente (aceptar "des" como alias de "dev")
+    if [[ "$ENVIRONMENT" == "des" ]]; then
+        ENVIRONMENT="dev"
+        echo "ℹ️  'des' interpretado como 'dev'"
+    fi
+    
     # Validar ambiente
     if [[ ! "$ENVIRONMENT" =~ ^(dev|qua|pro)$ ]]; then
         echo "❌ Error: Ambiente inválido '$ENVIRONMENT'"
@@ -27,6 +33,7 @@ if [ -n "$1" ]; then
         echo ""
         echo "Ejemplos:"
         echo "  ./build_deploy.sh dev    # Deploy en DEV (platform-partners-des)"
+        echo "  ./build_deploy.sh des    # Deploy en DEV (alias de 'dev')"
         echo "  ./build_deploy.sh qua    # Deploy en QUA (platform-partners-qua)"
         echo "  ./build_deploy.sh pro    # Deploy en PRO (platform-partners-pro)"
         echo ""
@@ -192,7 +199,8 @@ if gcloud run services describe ${SERVICE_NAME} --region=${REGION} --project=${P
         --min-instances ${MIN_INSTANCES} \
         --concurrency ${CONCURRENCY} \
         --port ${PORT} \
-        --service-account ${SERVICE_ACCOUNT}
+        --service-account ${SERVICE_ACCOUNT} \
+        --set-env-vars ENVIRONMENT=${ENVIRONMENT},GCP_PROJECT=${PROJECT_ID}
 else
     echo "🆕 Servicio no existe, creando..."
     gcloud run deploy ${SERVICE_NAME} \
@@ -208,7 +216,8 @@ else
         --timeout ${TIMEOUT} \
         --max-instances ${MAX_INSTANCES} \
         --min-instances ${MIN_INSTANCES} \
-        --concurrency ${CONCURRENCY}
+        --concurrency ${CONCURRENCY} \
+        --set-env-vars ENVIRONMENT=${ENVIRONMENT},GCP_PROJECT=${PROJECT_ID}
 fi
 
 if [ $? -eq 0 ]; then

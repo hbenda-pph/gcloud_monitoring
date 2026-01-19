@@ -51,7 +51,7 @@ def detect_environment():
     1. Variable de entorno ENVIRONMENT
     2. Variable de entorno GCP_PROJECT o GOOGLE_CLOUD_PROJECT
     3. Cliente BigQuery
-    4. Fallback a 'qua'
+    4. Fallback a 'dev' (más seguro que qua para desarrollo local)
     
     Retorna:
         str: 'dev', 'qua' o 'pro'
@@ -61,16 +61,20 @@ def detect_environment():
     if env in ['dev', 'qua', 'pro']:
         return env
     
-    # 2. Intentar desde project name
+    # 2. Intentar desde project name o project_id
     project = os.environ.get('GCP_PROJECT') or os.environ.get('GOOGLE_CLOUD_PROJECT')
     
     if project:
-        # Mapear project name a environment
-        if 'dev' in project.lower():
+        project_lower = project.lower()
+        # Mapear project name/ID a environment
+        # DEV: platform-partners-des o platform-partners-dev
+        if 'platform-partners-des' in project_lower or ('dev' in project_lower and 'des' not in project_lower):
             return 'dev'
-        elif 'pro' in project.lower() or 'production' in project.lower():
+        # PRO: constant-height-455614-i0 o platform-partners-pro
+        elif 'constant-height-455614-i0' in project_lower or ('pro' in project_lower and 'production' in project_lower):
             return 'pro'
-        elif 'qua' in project.lower() or 'qa' in project.lower():
+        # QUA: platform-partners-qua
+        elif 'qua' in project_lower or 'qa' in project_lower:
             return 'qua'
     
     # 3. Intentar desde cliente BigQuery
@@ -78,17 +82,29 @@ def detect_environment():
         client = bigquery.Client()
         project = client.project
         if project:
-            if 'dev' in project.lower():
+            project_lower = project.lower()
+            # DEV: platform-partners-des
+            if 'platform-partners-des' in project_lower:
                 return 'dev'
-            elif 'pro' in project.lower() or 'production' in project.lower():
+            # PRO: constant-height-455614-i0
+            elif 'constant-height-455614-i0' in project_lower:
                 return 'pro'
-            elif 'qua' in project.lower() or 'qa' in project.lower():
+            # QUA: platform-partners-qua
+            elif 'platform-partners-qua' in project_lower:
+                return 'qua'
+            # Fallback por nombre
+            elif 'dev' in project_lower:
+                return 'dev'
+            elif 'pro' in project_lower:
+                return 'pro'
+            elif 'qua' in project_lower or 'qa' in project_lower:
                 return 'qua'
     except:
         pass
     
-    # 4. Fallback
-    return 'qua'
+    # 4. Fallback a 'dev' (más seguro para desarrollo local)
+    # Si no se puede detectar, asumir DEV en lugar de QUA
+    return 'dev'
 
 def get_environment_config():
     """
@@ -98,7 +114,8 @@ def get_environment_config():
         dict: Configuración con project_name y project_id
     """
     env = detect_environment()
-    return ENVIRONMENT_CONFIG.get(env, ENVIRONMENT_CONFIG['qua'])
+    # Si el ambiente detectado no existe en la config, usar 'dev' como fallback
+    return ENVIRONMENT_CONFIG.get(env, ENVIRONMENT_CONFIG['dev'])
 
 def get_project_source():
     """
@@ -354,6 +371,19 @@ with st.sidebar:
     st.markdown(f"**Ambiente detectado:** `{current_env}`")
     st.markdown(f"**Project Name:** `{project_name}`")
     st.markdown(f"**Project ID:** `{project_id}`")
+    
+    # Información de debug
+    with st.expander("🔍 Debug - Variables de Entorno"):
+        env_var = os.environ.get('ENVIRONMENT', 'No configurada')
+        gcp_proj = os.environ.get('GCP_PROJECT', os.environ.get('GOOGLE_CLOUD_PROJECT', 'No configurada'))
+        st.caption(f"ENVIRONMENT: `{env_var}`")
+        st.caption(f"GCP_PROJECT: `{gcp_proj}`")
+        try:
+            bq_client = bigquery.Client()
+            bq_proj = bq_client.project
+            st.caption(f"BigQuery Client Project: `{bq_proj}`")
+        except Exception as e:
+            st.caption(f"BigQuery Client: Error - {str(e)}")
     
     st.markdown("---")
     
