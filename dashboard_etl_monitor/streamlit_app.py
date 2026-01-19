@@ -11,7 +11,6 @@ from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 from google.auth import default
 from google.auth import impersonated_credentials
-from google.auth.transport.requests import Request
 import os
 
 # ========== CONFIGURACIÓN ==========
