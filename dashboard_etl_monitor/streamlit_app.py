@@ -399,9 +399,9 @@ def format_timestamp_for_display(ts):
     """
     Formatea el timestamp para mostrar en la matriz con colores según antigüedad.
     
-    - 🟢 Verde: Últimas 24 horas
-    - 🟡 Amarillo: 1-7 días
-    - 🔴 Rojo: Más de 7 días
+    - 🟢 Verde: Menos de 1 día (últimas 24 horas)
+    - 🟡 Amarillo: Más de 1 día (>= 1 día y < 2 días)
+    - 🔴 Rojo: Más de 2 días (>= 2 días)
     - ❌ Sin datos (tabla no existe o no tiene _etl_synced)
     """
     if ts is None or pd.isna(ts):
@@ -422,13 +422,17 @@ def format_timestamp_for_display(ts):
                 ts = ts.replace(tzinfo=None)
         
         time_diff = now - ts
+        days_diff = time_diff.days
         
         # Formatear según antigüedad
-        if time_diff.days > 7:
-            return f"🔴 {ts.strftime('%Y-%m-%d')}"
-        elif time_diff.days > 1:
-            return f"🟡 {ts.strftime('%m-%d %H:%M')}"
+        if days_diff >= 2:
+            # Rojo: Más de 2 días (>= 2 días)
+            return f"🔴 {ts.strftime('%Y-%m-%d %H:%M')}"
+        elif days_diff >= 1:
+            # Amarillo: Más de 1 día (>= 1 día y < 2 días)
+            return f"🟡 {ts.strftime('%Y-%m-%d %H:%M')}"
         else:
+            # Verde: Menos de 1 día (últimas 24 horas)
             return f"🟢 {ts.strftime('%m-%d %H:%M')}"
     except Exception:
         # Si hay error al formatear, mostrar solo la fecha
@@ -528,11 +532,11 @@ display_df = matrix_df.copy()
 for col in display_df.columns:
     display_df[col] = display_df[col].apply(format_timestamp_for_display)
 
-# Mostrar la matriz
+# Mostrar la matriz sin scroll (mostrar todas las filas de compañías)
 st.dataframe(
     display_df,
     use_container_width=True,
-    height=600
+    height=None  # Sin límite de altura, muestra todas las filas
 )
 
 # ========== ESTADÍSTICAS ==========
