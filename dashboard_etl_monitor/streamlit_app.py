@@ -23,37 +23,104 @@ METADATA_PROJECT = "pph-central"
 METADATA_DATASET = "management"
 METADATA_TABLE = "metadata_consolidated_tables"
 
+# ========== CONFIGURACIÓN DE AMBIENTES ==========
+
+# Mapeo de ambientes a project_ids
+ENVIRONMENT_CONFIG = {
+    "dev": {
+        "project_name": "platform-partners-dev",
+        "project_id": "platform-partners-dev"
+    },
+    "qua": {
+        "project_name": "platform-partners-qua",
+        "project_id": "platform-partners-qua"
+    },
+    "pro": {
+        "project_name": "platform-partners-pro",
+        "project_id": "constant-height-455614-i0"
+    }
+}
+
 # ========== FUNCIONES AUXILIARES ==========
 
-def get_project_source():
+def detect_environment():
     """
-    Obtiene el proyecto del ambiente actual.
-    Prioridad: variable de entorno > cliente BigQuery > fallback
+    Detecta el ambiente actual (dev, qua, pro).
+    
+    Prioridad:
+    1. Variable de entorno ENVIRONMENT
+    2. Variable de entorno GCP_PROJECT o GOOGLE_CLOUD_PROJECT
+    3. Cliente BigQuery
+    4. Fallback a 'qua'
+    
+    Retorna:
+        str: 'dev', 'qua' o 'pro'
     """
+    # 1. Intentar desde variable de entorno explícita
+    env = os.environ.get('ENVIRONMENT', '').lower()
+    if env in ['dev', 'qua', 'pro']:
+        return env
+    
+    # 2. Intentar desde project name
     project = os.environ.get('GCP_PROJECT') or os.environ.get('GOOGLE_CLOUD_PROJECT')
     
     if project:
-        return project
+        # Mapear project name a environment
+        if 'dev' in project.lower():
+            return 'dev'
+        elif 'pro' in project.lower() or 'production' in project.lower():
+            return 'pro'
+        elif 'qua' in project.lower() or 'qa' in project.lower():
+            return 'qua'
     
+    # 3. Intentar desde cliente BigQuery
     try:
         client = bigquery.Client()
-        return client.project
+        project = client.project
+        if project:
+            if 'dev' in project.lower():
+                return 'dev'
+            elif 'pro' in project.lower() or 'production' in project.lower():
+                return 'pro'
+            elif 'qua' in project.lower() or 'qa' in project.lower():
+                return 'qua'
     except:
         pass
     
-    return "platform-partners-qua"  # Fallback
+    # 4. Fallback
+    return 'qua'
+
+def get_environment_config():
+    """
+    Obtiene la configuración del ambiente actual.
+    
+    Retorna:
+        dict: Configuración con project_name y project_id
+    """
+    env = detect_environment()
+    return ENVIRONMENT_CONFIG.get(env, ENVIRONMENT_CONFIG['qua'])
+
+def get_project_source():
+    """
+    Obtiene el project_name del ambiente actual.
+    (Nombre legible del proyecto)
+    """
+    config = get_environment_config()
+    return config['project_name']
 
 def get_bigquery_project_id():
     """
     Obtiene el project_id real para usar en queries SQL.
-    Maneja el caso especial de PRO donde project_name != project_id.
+    (ID técnico del proyecto, puede diferir del nombre en PRO)
     """
-    project_source = get_project_source()
-    
-    if project_source == "platform-partners-pro":
-        return "constant-height-455614-i0"
-    
-    return project_source
+    config = get_environment_config()
+    return config['project_id']
+
+def get_current_environment():
+    """
+    Obtiene el nombre del ambiente actual (dev/qua/pro).
+    """
+    return detect_environment()
 
 # ========== PASO 1: OBTENER COMPAÑÍAS ==========
 
@@ -268,18 +335,36 @@ def format_timestamp_for_display(ts):
 
 # ========== INTERFAZ STREAMLIT ==========
 
-st.title("📊 Dashboard de Monitoreo ETL ServiceTitan")
+# Título con ambiente
+current_env = get_current_environment().upper()
+st.title(f"📊 Dashboard de Monitoreo ETL ServiceTitan - {current_env}")
 st.markdown("**Matriz: Tablas (Y) vs Compañías (X) - Último MAX(_etl_synced)**")
 st.markdown("---")
 
 # Sidebar con controles
 with st.sidebar:
     st.header("⚙️ Configuración")
-    st.markdown(f"**Proyecto activo:** {get_project_source()}")
-    st.markdown(f"**Project ID:** {get_bigquery_project_id()}")
+    
+    # Información del ambiente
+    current_env = get_current_environment().upper()
+    project_name = get_project_source()
+    project_id = get_bigquery_project_id()
+    
+    st.markdown("### 🌍 Ambiente")
+    st.markdown(f"**Ambiente detectado:** `{current_env}`")
+    st.markdown(f"**Project Name:** `{project_name}`")
+    st.markdown(f"**Project ID:** `{project_id}`")
+    
+    st.markdown("---")
+    
+    # Selector de ambiente (solo informativo por ahora)
+    st.markdown("### 🔧 Opciones")
+    st.info(f"💡 Ambiente detectado automáticamente: **{current_env}**")
+    st.caption("El ambiente se detecta desde variables de entorno o configuración GCP")
     
     if st.button("🔄 Actualizar Datos", type="primary"):
         st.cache_data.clear()
+        st.rerun()
 
 # ========== PASO 1: CARGAR COMPAÑÍAS ==========
 st.subheader("📋 Paso 1: Cargando Compañías...")
