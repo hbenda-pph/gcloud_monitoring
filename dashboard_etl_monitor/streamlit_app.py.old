@@ -1,7 +1,6 @@
 """
 Dashboard de Monitoreo ETL ServiceTitan
-Matriz: Compañías (Y) vs Tablas (X) con MAX(_etl_synced)
-Monitoreo de las 11 tablas de Bronze
+Matriz: Tablas (Y) vs Compañías (X) con MAX(_etl_synced)
 """
 
 import streamlit as st
@@ -176,10 +175,10 @@ def get_companies():
 @st.cache_data(ttl=3600)  # Cache por 1 hora (metadata cambia poco)
 def get_tables_from_metadata():
     """
-    Obtiene las 11 tablas de Bronze desde metadata.
+    Obtiene todas las tablas desde metadata que deben estar en Bronze.
     
     Retorna:
-        Lista de nombres de tablas ordenadas (máximo 11 tablas)
+        Lista de nombres de tablas ordenadas
     """
     try:
         client = bigquery.Client(project=METADATA_PROJECT)
@@ -192,14 +191,10 @@ def get_tables_from_metadata():
               AND active = TRUE
               AND silver_use_bronze = TRUE
             ORDER BY table_name
-            LIMIT 11
         """
         
         df = client.query(query).to_dataframe()
-        tables = df['table_name'].tolist()
-        
-        # Si hay más de 11, tomar solo las primeras 11
-        return tables[:11] if len(tables) > 11 else tables
+        return df['table_name'].tolist()
         
     except Exception as e:
         st.error(f"❌ Error obteniendo tablas desde metadata: {str(e)}")
@@ -250,23 +245,23 @@ def get_last_sync_timestamp(project_id, table_name):
 
 def build_sync_matrix(companies_df, tables_list):
     """
-    Construye la matriz de sincronización: Compañías (filas) vs Tablas (columnas).
+    Construye la matriz de sincronización: Tablas (filas) vs Compañías (columnas).
     
-    Para cada combinación compañía-tabla:
+    Para cada combinación tabla-compañía:
     - Consulta MAX(_etl_synced) en {company_project_id}.bronze.{table_name}
     - Almacena el timestamp resultante
     
     Args:
         companies_df: DataFrame con compañías (debe tener company_project_id)
-        tables_list: Lista de nombres de tablas (las 11 tablas de Bronze)
+        tables_list: Lista de nombres de tablas
         
     Retorna:
         DataFrame con:
-            - Índices (filas) = nombres de compañías
-            - Columnas = nombres de tablas
+            - Índices (filas) = nombres de tablas
+            - Columnas = nombres de compañías
             - Valores = timestamps de MAX(_etl_synced) o None
     """
-    # Estructura: {company_name: {table_name: timestamp}}
+    # Estructura: {table_name: {company_name: timestamp}}
     matrix_data = {}
     
     # Barra de progreso
@@ -275,38 +270,39 @@ def build_sync_matrix(companies_df, tables_list):
     total_cells = len(companies_df) * len(tables_list)
     current_cell = 0
     
-    # Iterar sobre cada COMPAÑÍA (serán las FILAS de la matriz)
-    for _, company in companies_df.iterrows():
-        company_name = company['company_name']
-        project_id = company['company_project_id']
+    # Iterar sobre cada TABLA (serán las FILAS de la matriz)
+    for table_name in tables_list:
         row_data = {}
         
-        # Iterar sobre cada TABLA (serán las COLUMNAS de la matriz)
-        for table_name in tables_list:
+        # Iterar sobre cada COMPAÑÍA (serán las COLUMNAS de la matriz)
+        for _, company in companies_df.iterrows():
+            company_name = company['company_name']
+            project_id = company['company_project_id']
+            
             # Obtener último timestamp de sincronización
             last_sync = get_last_sync_timestamp(project_id, table_name)
-            row_data[table_name] = last_sync
+            row_data[company_name] = last_sync
             
             # Actualizar progreso
             current_cell += 1
             progress = current_cell / total_cells
             progress_bar.progress(progress)
-            status_text.text(f"Procesando: {company_name} - {table_name} ({current_cell}/{total_cells})")
+            status_text.text(f"Procesando: {table_name} - {company_name} ({current_cell}/{total_cells})")
         
-        # Guardar la fila completa para esta compañía
-        matrix_data[company_name] = row_data
+        # Guardar la fila completa para esta tabla
+        matrix_data[table_name] = row_data
     
     progress_bar.empty()
     status_text.empty()
     
     # Convertir a DataFrame
-    # matrix_data es un dict: {company: {table: timestamp}}
-    # Al crear DataFrame(matrix_data) obtenemos:
-    #   - Filas (índices) = compañías
-    #   - Columnas = tablas
+    # matrix_data es un dict: {table: {company: timestamp}}
+    # Al crear DataFrame(matrix_data).T obtenemos:
+    #   - Filas (índices) = tablas
+    #   - Columnas = compañías
     #   - Valores = timestamps
     matrix_df = pd.DataFrame(matrix_data).T
-    matrix_df.index.name = 'Compañía'
+    matrix_df.index.name = 'Tabla'
     
     return matrix_df
 
@@ -319,10 +315,10 @@ def format_timestamp_for_display(ts):
     - 🟢 Verde: Últimas 24 horas
     - 🟡 Amarillo: 1-7 días
     - 🔴 Rojo: Más de 7 días
-    - ❌ Sin datos (tabla no existe o no tiene _etl_synced)
+    - ❌ Sin datos
     """
     if ts is None or pd.isna(ts):
-        return "❌"  # Tabla no existe o no tiene datos en _etl_synced
+        return "❌"
     
     # Convertir a datetime si es necesario
     if isinstance(ts, pd.Timestamp):
@@ -359,7 +355,7 @@ def format_timestamp_for_display(ts):
 # Título con ambiente
 current_env = get_current_environment().upper()
 st.title(f"📊 Dashboard de Monitoreo ETL ServiceTitan - {current_env}")
-st.markdown("**Matriz: Compañías (Y) vs Tablas Bronze (X) - Último MAX(_etl_synced)**")
+st.markdown("**Matriz: Tablas (Y) vs Compañías (X) - Último MAX(_etl_synced)**")
 st.markdown("---")
 
 # Sidebar con controles
@@ -420,11 +416,9 @@ if not tables_list:
     st.error("❌ No se encontraron tablas en metadata. Verifica la conexión.")
     st.stop()
 
-st.success(f"✅ {len(tables_list)} tablas de Bronze encontradas en metadata")
-with st.expander("Ver lista de tablas de Bronze"):
+st.success(f"✅ {len(tables_list)} tablas encontradas en metadata")
+with st.expander("Ver lista de tablas"):
     st.write(tables_list)
-    if len(tables_list) > 11:
-        st.warning(f"⚠️ Se encontraron {len(tables_list)} tablas, mostrando solo las primeras 11")
 
 # ========== PASO 3-4: CONSTRUIR Y MOSTRAR MATRIZ ==========
 st.subheader("📊 Paso 3-4: Construyendo Matriz de Sincronización...")
@@ -434,8 +428,7 @@ st.info("⏳ Esto puede tomar varios minutos. Consultando MAX(_etl_synced) para 
 matrix_df = build_sync_matrix(companies_df, tables_list)
 
 # Mostrar matriz
-st.subheader("📊 Matriz: Compañías vs Tablas Bronze (MAX(_etl_synced))")
-st.caption("❌ = Tabla no existe o no tiene datos en _etl_synced")
+st.subheader("📊 Matriz: Tablas vs Compañías (MAX(_etl_synced))")
 
 # Crear versión formateada para visualización
 display_df = matrix_df.copy()
