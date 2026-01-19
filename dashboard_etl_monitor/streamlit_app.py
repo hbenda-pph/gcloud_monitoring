@@ -29,7 +29,7 @@ METADATA_TABLE = "metadata_consolidated_tables"
 ENVIRONMENT_CONFIG = {
     "dev": {
         "project_name": "platform-partners-dev",
-        "project_id": "platform-partners-dev"
+        "project_id": "platform-partners-des"
     },
     "qua": {
         "project_name": "platform-partners-qua",

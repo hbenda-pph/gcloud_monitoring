@@ -39,16 +39,28 @@ El ambiente se detecta en el siguiente orden de prioridad:
 
 | Ambiente | Project Name | Project ID |
 |----------|--------------|------------|
-| **dev** | `platform-partners-dev` | `platform-partners-dev` |
+| **dev** | `platform-partners-dev` | `platform-partners-des` |
 | **qua** | `platform-partners-qua` | `platform-partners-qua` |
 | **pro** | `platform-partners-pro` | `constant-height-455614-i0` |
 
-### Ejemplo de Uso por Ambiente
+## 📊 Uso Local
+
+### Ejecución Local
+
+```bash
+# Instalar dependencias
+pip install -r requirements.txt
+
+# Ejecutar dashboard
+streamlit run streamlit_app.py
+```
+
+### Ejemplo de Uso por Ambiente (Local)
 
 ```bash
 # Ambiente DEV
 export ENVIRONMENT=dev
-export GCP_PROJECT=platform-partners-dev
+export GCP_PROJECT=platform-partners-des
 streamlit run streamlit_app.py
 
 # Ambiente QUA (por defecto)
@@ -62,10 +74,74 @@ export GCP_PROJECT=platform-partners-pro
 streamlit run streamlit_app.py
 ```
 
-## 📊 Uso
+## 🚀 Deploy en Google Cloud Run
+
+### Prerrequisitos
+
+1. **Google Cloud SDK instalado y configurado:**
+   ```bash
+   gcloud auth login
+   gcloud config set project [PROJECT_ID]
+   ```
+
+2. **Permisos necesarios:**
+   - Cloud Build Editor
+   - Cloud Run Admin
+   - Service Account User
+
+3. **Service Account configurado:**
+   - `streamlit-bigquery-sa@{PROJECT_ID}.iam.gserviceaccount.com`
+   - Con permisos de BigQuery Data Viewer
+
+### Deploy Automático
+
+El script `build_deploy.sh` automatiza todo el proceso de build y deploy:
 
 ```bash
-streamlit run streamlit_app.py
+# Dar permisos de ejecución
+chmod +x build_deploy.sh
+
+# Deploy en ambiente específico
+./build_deploy.sh dev    # Deploy en DEV
+./build_deploy.sh qua    # Deploy en QUA
+./build_deploy.sh pro    # Deploy en PRO
+
+# O sin parámetros (detecta automáticamente desde gcloud)
+./build_deploy.sh
+```
+
+### Qué hace el script
+
+1. **Detecta el ambiente** (dev/qua/pro) desde el proyecto activo de gcloud
+2. **Verifica archivos** necesarios (streamlit_app.py, requirements.txt, Dockerfile)
+3. **Build de imagen Docker** usando Cloud Build
+4. **Deploy en Cloud Run** con configuración optimizada
+
+### Configuración del Servicio
+
+- **Memoria:** 2Gi
+- **CPU:** 2
+- **Timeout:** 300s
+- **Max Instances:** 10
+- **Min Instances:** 0
+- **Concurrency:** 80
+- **Port:** 8501
+- **Región:** us-east1
+
+### Verificar Deploy
+
+```bash
+# Obtener URL del servicio
+gcloud run services describe etl-monitor-dashboard-{ENV} \
+  --region=us-east1 \
+  --project={PROJECT_ID} \
+  --format='value(status.url)'
+
+# Ver logs
+gcloud run services logs read etl-monitor-dashboard-{ENV} \
+  --region=us-east1 \
+  --project={PROJECT_ID} \
+  --tail
 ```
 
 El dashboard mostrará:
