@@ -443,22 +443,32 @@ def format_timestamp_for_display(ts):
 
 # ========== INTERFAZ STREAMLIT ==========
 
-# Título con ambiente
+# CSS personalizado para reducir tamaños de texto
+st.markdown("""
+    <style>
+    h1 {font-size: 1.5rem !important;}
+    h2 {font-size: 1.2rem !important;}
+    h3 {font-size: 1rem !important;}
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {margin-top: 0.5rem; margin-bottom: 0.5rem;}
+    </style>
+""", unsafe_allow_html=True)
+
+# Título con ambiente (reducido)
 current_env = get_current_environment().upper()
-st.title(f"📊 Dashboard de Monitoreo ETL ServiceTitan - {current_env}")
-st.markdown("**Matriz: Compañías (Y) vs Tablas Bronze (X) - Último MAX(_etl_synced)**")
+st.markdown(f"### 📊 Dashboard ETL ServiceTitan - {current_env}")
+st.markdown("**Compañías (Y) vs Tablas Bronze (X) - MAX(_etl_synced)**")
 st.markdown("---")
 
 # Sidebar con controles
 with st.sidebar:
-    st.header("⚙️ Configuración")
+    st.markdown("#### ⚙️ Configuración")
     
     # Información del ambiente
     current_env = get_current_environment().upper()
     project_name = get_project_source()
     project_id = get_bigquery_project_id()
     
-    st.markdown("### 🌍 Ambiente")
+    st.markdown("##### 🌍 Ambiente")
     st.markdown(f"**Ambiente detectado:** `{current_env}`")
     st.markdown(f"**Project Name:** `{project_name}`")
     st.markdown(f"**Project ID:** `{project_id}`")
@@ -479,7 +489,7 @@ with st.sidebar:
     st.markdown("---")
     
     # Selector de ambiente (solo informativo por ahora)
-    st.markdown("### 🔧 Opciones")
+    st.markdown("##### 🔧 Opciones")
     st.info(f"💡 Ambiente detectado automáticamente: **{current_env}**")
     st.caption("El ambiente se detecta desde variables de entorno o configuración GCP")
     
@@ -491,7 +501,7 @@ with st.sidebar:
         st.rerun()
 
 # ========== PASO 1: CARGAR COMPAÑÍAS ==========
-st.subheader("📋 Paso 1: Cargando Compañías...")
+st.markdown("**📋 Paso 1: Cargando Compañías...**")
 companies_df = get_companies()
 
 if companies_df.empty:
@@ -503,7 +513,7 @@ with st.expander("Ver lista de compañías"):
     st.dataframe(companies_df, use_container_width=True)
 
 # ========== PASO 2: CARGAR TABLAS ==========
-st.subheader("📋 Paso 2: Cargando Tablas desde Metadata...")
+st.markdown("**📋 Paso 2: Cargando Tablas desde Metadata...**")
 tables_list = get_tables_from_metadata()
 
 if not tables_list:
@@ -517,14 +527,14 @@ with st.expander("Ver lista de tablas de Bronze"):
         st.warning(f"⚠️ Se encontraron {len(tables_list)} tablas, mostrando solo las primeras 11")
 
 # ========== PASO 3-4: CONSTRUIR Y MOSTRAR MATRIZ ==========
-st.subheader("📊 Paso 3-4: Construyendo Matriz de Sincronización...")
+st.markdown("**📊 Paso 3-4: Construyendo Matriz de Sincronización...**")
 st.info("⏳ Esto puede tomar varios minutos. Consultando MAX(_etl_synced) para cada combinación tabla-compañía...")
 
 # Construir la matriz
 matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
 
 # Mostrar matriz
-st.subheader("📊 Matriz: Compañías vs Tablas Bronze (MAX(_etl_synced))")
+st.markdown("**📊 Matriz: Compañías vs Tablas Bronze (MAX(_etl_synced))**")
 st.caption("❌ = Tabla no existe o no tiene datos en _etl_synced")
 
 # Crear versión formateada para visualización
@@ -533,14 +543,14 @@ for col in display_df.columns:
     display_df[col] = display_df[col].apply(format_timestamp_for_display)
 
 # Mostrar la matriz sin scroll (mostrar todas las filas de compañías)
+# Usar st.dataframe sin height para mostrar todas las filas sin scroll
 st.dataframe(
     display_df,
-    use_container_width=True,
-    height=None  # Sin límite de altura, muestra todas las filas
+    use_container_width=True
 )
 
 # ========== ESTADÍSTICAS ==========
-st.subheader("📈 Estadísticas")
+st.markdown("**📈 Estadísticas**")
 col1, col2, col3 = st.columns(3)
 
 with col1:
