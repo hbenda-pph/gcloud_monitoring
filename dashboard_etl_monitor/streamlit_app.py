@@ -225,30 +225,80 @@ def get_last_sync_timestamp(project_id, table_name):
         
         # Verificar si la tabla existe
         try:
-            client.get_table(table_ref)
+            table = client.get_table(table_ref)
         except NotFound:
+            # Tabla no existe
+            return None
+        except Exception as e:
+            # Error de permisos u otro error
             return None
         
-        # Obtener MAX(_etl_synced)
-        query = f"""
-            SELECT MAX(_etl_synced) as max_sync
+        # Verificar que la tabla tenga filas
+        count_query = f"""
+            SELECT COUNT(*) as row_count
             FROM `{table_ref}`
         """
         
-        result = client.query(query).to_dataframe()
+        try:
+            count_result = client.query(count_query).to_dataframe()
+            if count_result.empty or count_result.iloc[0]['row_count'] == 0:
+                # Tabla existe pero está vacía
+                return None
+        except Exception:
+            # Si no podemos contar, intentamos igual con MAX
+            pass
         
-        if result.empty or result.iloc[0]['max_sync'] is None:
-            return None
+        # Obtener MAX(_etl_synced) - usar COALESCE para manejar NULLs
+        query = f"""
+            SELECT MAX(_etl_synced) as max_sync
+            FROM `{table_ref}`
+            WHERE _etl_synced IS NOT NULL
+        """
+        
+        try:
+            result = client.query(query).to_dataframe()
             
-        return pd.to_datetime(result.iloc[0]['max_sync'])
+            # Verificar que tenemos resultados
+            if result.empty:
+                return None
+            
+            max_sync_value = result.iloc[0]['max_sync']
+            
+            # Si es None o NaN, la tabla no tiene valores en _etl_synced
+            if max_sync_value is None or pd.isna(max_sync_value):
+                return None
+            
+            # Convertir a datetime
+            return pd.to_datetime(max_sync_value)
+            
+        except Exception as query_error:
+            # Error en la query - puede ser que el campo no exista o error de permisos
+            # Intentar una query alternativa para verificar si el campo existe
+            try:
+                # Query para verificar estructura de la tabla
+                schema_check = f"""
+                    SELECT column_name 
+                    FROM `{project_id}.{dataset_id}.INFORMATION_SCHEMA.COLUMNS`
+                    WHERE table_name = '{table_name}' 
+                      AND column_name = '_etl_synced'
+                """
+                schema_result = client.query(schema_check).to_dataframe()
+                if schema_result.empty:
+                    # El campo _etl_synced no existe en esta tabla
+                    return None
+            except:
+                pass
+            
+            # Si llegamos aquí, hubo un error pero no sabemos exactamente qué
+            return None
         
     except Exception as e:
-        # Si hay error (sin permisos, etc.), retornar None
+        # Error general (permisos, conexión, etc.)
         return None
 
 # ========== PASO 4: CONSTRUIR MATRIZ ==========
 
-def build_sync_matrix(companies_df, tables_list):
+def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     """
     Construye la matriz de sincronización: Compañías (filas) vs Tablas (columnas).
     
@@ -259,6 +309,7 @@ def build_sync_matrix(companies_df, tables_list):
     Args:
         companies_df: DataFrame con compañías (debe tener company_project_id)
         tables_list: Lista de nombres de tablas (las 11 tablas de Bronze)
+        debug_mode: Si es True, muestra información detallada de errores
         
     Retorna:
         DataFrame con:
@@ -268,6 +319,7 @@ def build_sync_matrix(companies_df, tables_list):
     """
     # Estructura: {company_name: {table_name: timestamp}}
     matrix_data = {}
+    error_log = []  # Para registrar errores si debug_mode está activo
     
     # Barra de progreso
     progress_bar = st.progress(0)
@@ -287,6 +339,11 @@ def build_sync_matrix(companies_df, tables_list):
             last_sync = get_last_sync_timestamp(project_id, table_name)
             row_data[table_name] = last_sync
             
+            # Si es None y debug_mode, registrar el error
+            if last_sync is None and debug_mode:
+                table_ref = f"{project_id}.bronze.{table_name}"
+                error_log.append(f"{company_name} - {table_name} ({table_ref}): No se pudo obtener MAX(_etl_synced)")
+            
             # Actualizar progreso
             current_cell += 1
             progress = current_cell / total_cells
@@ -298,6 +355,12 @@ def build_sync_matrix(companies_df, tables_list):
     
     progress_bar.empty()
     status_text.empty()
+    
+    # Mostrar errores si hay y debug_mode está activo
+    if debug_mode and error_log:
+        with st.expander("🔍 Debug - Errores Detectados", expanded=False):
+            for error in error_log:
+                st.text(error)
     
     # Convertir a DataFrame
     # matrix_data es un dict: {company: {table: timestamp}}
@@ -396,6 +459,9 @@ with st.sidebar:
     st.info(f"💡 Ambiente detectado automáticamente: **{current_env}**")
     st.caption("El ambiente se detecta desde variables de entorno o configuración GCP")
     
+    # Modo debug
+    debug_mode = st.checkbox("🔍 Modo Debug", value=False, help="Muestra información detallada de errores cuando aparecen ❌")
+    
     if st.button("🔄 Actualizar Datos", type="primary"):
         st.cache_data.clear()
         st.rerun()
@@ -431,7 +497,7 @@ st.subheader("📊 Paso 3-4: Construyendo Matriz de Sincronización...")
 st.info("⏳ Esto puede tomar varios minutos. Consultando MAX(_etl_synced) para cada combinación tabla-compañía...")
 
 # Construir la matriz
-matrix_df = build_sync_matrix(companies_df, tables_list)
+matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
 
 # Mostrar matriz
 st.subheader("📊 Matriz: Compañías vs Tablas Bronze (MAX(_etl_synced))")
