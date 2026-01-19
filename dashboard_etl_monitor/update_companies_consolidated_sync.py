@@ -203,4 +203,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"❌ Error fatal en el proceso: {str(e)}", exc_info=True)
+        raise  # Re-lanzar para que Cloud Run Job marque como fallido
