@@ -9,6 +9,9 @@ import pandas as pd
 from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
+from google.auth import default
+from google.auth import impersonated_credentials
+from google.auth.transport.requests import Request
 import os
 
 # ========== CONFIGURACIÓN ==========
@@ -140,6 +143,46 @@ def get_current_environment():
     """
     return detect_environment()
 
+def get_bigquery_client(project_id):
+    """
+    Crea un cliente BigQuery usando la cuenta de servicio correcta.
+    
+    Args:
+        project_id: ID del proyecto de BigQuery
+        
+    Retorna:
+        Cliente BigQuery configurado con la cuenta de servicio
+    """
+    try:
+        # Obtener credenciales por defecto
+        credentials, _ = default()
+        
+        # Determinar la cuenta de servicio según el ambiente
+        env = detect_environment()
+        if env == "dev":
+            service_account = "etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
+        elif env == "qua":
+            service_account = "etl-servicetitan@platform-partners-qua.iam.gserviceaccount.com"
+        elif env == "pro":
+            service_account = "etl-servicetitan@constant-height-455614-i0.iam.gserviceaccount.com"
+        else:
+            service_account = "etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
+        
+        # Crear credenciales impersonadas
+        target_credentials = impersonated_credentials.Credentials(
+            source_credentials=credentials,
+            target_principal=service_account,
+            target_scopes=['https://www.googleapis.com/auth/bigquery', 'https://www.googleapis.com/auth/cloud-platform']
+        )
+        
+        # Crear cliente con las credenciales impersonadas
+        client = bigquery.Client(project=project_id, credentials=target_credentials)
+        return client
+        
+    except Exception:
+        # Si falla la impersonación, usar cliente por defecto
+        return bigquery.Client(project=project_id)
+
 # ========== PASO 1: OBTENER COMPAÑÍAS ==========
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
@@ -152,7 +195,7 @@ def get_companies():
     """
     try:
         PROJECT_ID = get_bigquery_project_id()
-        client = bigquery.Client(project=PROJECT_ID)
+        client = get_bigquery_client(PROJECT_ID)
         
         query = f"""
             SELECT 
@@ -182,7 +225,7 @@ def get_tables_from_metadata():
         Lista de nombres de tablas ordenadas (máximo 11 tablas)
     """
     try:
-        client = bigquery.Client(project=METADATA_PROJECT)
+        client = get_bigquery_client(METADATA_PROJECT)
         
         query = f"""
             SELECT 
@@ -219,11 +262,19 @@ def get_last_sync_timestamp(project_id, table_name, debug_mode=False):
         
     Retorna:
         datetime con el último timestamp de sincronización, o None si no existe
+        Si debug_mode=True y hay error, retorna (None, error_info)
     """
     error_info = None
     try:
-        # Crear cliente BigQuery con el project_id correcto
-        client = bigquery.Client(project=project_id)
+        # Validar parámetros
+        if not project_id or not table_name:
+            if debug_mode:
+                error_info = f"Parámetros inválidos: project_id={project_id}, table_name={table_name}"
+                return None, error_info
+            return None
+        
+        # Crear cliente BigQuery con la cuenta de servicio correcta
+        client = get_bigquery_client(project_id)
         
         # Query exacta que funciona en BigQuery Studio
         # Formato: `project_id.dataset.table_name`
@@ -234,14 +285,20 @@ def get_last_sync_timestamp(project_id, table_name, debug_mode=False):
             WHERE _etl_synced IS NOT NULL
         """
         
-        # Ejecutar query
-        query_job = client.query(query)
-        result = query_job.to_dataframe()
+        # Ejecutar query con configuración explícita
+        job_config = bigquery.QueryJobConfig()
+        job_config.use_legacy_sql = False
+        
+        query_job = client.query(query, job_config=job_config)
+        
+        # Esperar a que termine y obtener resultado
+        result = query_job.result().to_dataframe()
         
         # Verificar resultado
         if result.empty:
             if debug_mode:
                 error_info = f"Query ejecutada pero resultado vacío: {table_ref}"
+                return None, error_info
             return None
         
         max_sync_value = result.iloc[0]['max_sync']
@@ -250,6 +307,7 @@ def get_last_sync_timestamp(project_id, table_name, debug_mode=False):
         if max_sync_value is None or pd.isna(max_sync_value):
             if debug_mode:
                 error_info = f"Query ejecutada pero max_sync es NULL: {table_ref}"
+                return None, error_info
             return None
         
         # Convertir a datetime y retornar
@@ -264,14 +322,9 @@ def get_last_sync_timestamp(project_id, table_name, debug_mode=False):
     except Exception as e:
         # Cualquier otro error (permisos, campo no existe, etc.)
         if debug_mode:
-            error_info = f"Error en {project_id}.bronze.{table_name}: {str(e)}"
+            error_info = f"Error en {project_id}.bronze.{table_name}: {type(e).__name__} - {str(e)}"
             return None, error_info
         return None
-    
-    # Si hay error_info y debug_mode, retornarlo junto con None
-    if debug_mode and error_info:
-        return None, error_info
-    return None
 
 # ========== PASO 4: CONSTRUIR MATRIZ ==========
 
@@ -297,6 +350,7 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     # Estructura: {company_name: {table_name: timestamp}}
     matrix_data = {}
     error_log = []  # Para registrar errores si debug_mode está activo
+    sql_log = []  # Para registrar las queries SQL ejecutadas
     
     # Barra de progreso
     progress_bar = st.progress(0)
@@ -314,6 +368,12 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
         for table_name in tables_list:
             # Obtener último timestamp de sincronización
             result = get_last_sync_timestamp(project_id, table_name, debug_mode=debug_mode)
+            
+            # Si debug_mode, capturar la query SQL
+            if debug_mode:
+                table_ref = f"{project_id}.bronze.{table_name}"
+                sql_query = f"SELECT MAX(_etl_synced) as max_sync FROM `{table_ref}` WHERE _etl_synced IS NOT NULL"
+                sql_log.append(f"**{company_name} - {table_name}**\n```sql\n{sql_query}\n```\n")
             
             # Manejar resultado (puede ser tuple si debug_mode está activo)
             if isinstance(result, tuple):
@@ -337,11 +397,20 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     progress_bar.empty()
     status_text.empty()
     
-    # Mostrar errores si hay y debug_mode está activo
-    if debug_mode and error_log:
-        with st.expander("🔍 Debug - Errores Detectados", expanded=False):
-            for error in error_log:
-                st.text(error)
+    # Mostrar SQL y errores si debug_mode está activo
+    if debug_mode:
+        with st.expander("🔍 Debug - Queries SQL Ejecutadas", expanded=True):
+            if sql_log:
+                for sql_entry in sql_log:
+                    st.markdown(sql_entry)
+                    st.markdown("---")
+            else:
+                st.text("No se ejecutaron queries")
+        
+        if error_log:
+            with st.expander("🔍 Debug - Errores Detectados", expanded=True):
+                for error in error_log:
+                    st.text(error)
     
     # Convertir a DataFrame
     # matrix_data es un dict: {company: {table: timestamp}}
