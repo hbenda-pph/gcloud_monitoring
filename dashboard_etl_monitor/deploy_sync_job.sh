@@ -23,7 +23,7 @@ echo ""
 # Paso 1: Build de imagen
 echo "🔨 PASO 1: BUILD (Creando imagen Docker)"
 echo "========================================="
-gcloud builds submit --tag ${IMAGE_NAME} --project=${PROJECT_ID} -f Dockerfile.sync
+gcloud builds submit --config=cloudbuild.sync.yaml --project=${PROJECT_ID}
 
 if [ $? -eq 0 ]; then
     echo "✅ Build exitoso!"
