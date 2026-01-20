@@ -4,15 +4,17 @@
 
 ### Paso 0: Verificar Service Accounts Existentes
 
-Primero, verifica qué service accounts existen en el proyecto:
+Primero, verifica qué service accounts existen en el proyecto `pph-central`:
 
 ```bash
 gcloud iam service-accounts list --project=pph-central
 ```
 
-### Opción 1: Crear Nueva Service Account (Recomendado)
+**Nota:** La service account `etl-servicetitan` existe en los proyectos de compañías (dev, qua, pro), pero el sync job corre en `pph-central`, así que necesitamos una service account en ese proyecto.
 
-Si la service account `etl-servicetitan@pph-central.iam.gserviceaccount.com` no existe, créala:
+### Opción 1: Crear Service Account en pph-central (Recomendado)
+
+Crea la service account `etl-servicetitan` en el proyecto `pph-central`:
 
 ```bash
 # Crear la service account
@@ -50,18 +52,20 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 **Nota:** Necesitas tener permisos de `iam.serviceAccounts.create` y `iam.serviceAccounts.setIamPolicy` o que un administrador ejecute estos comandos por ti.
 
-### Opción 2: Usar Service Account Existente
+### Opción 2: Usar Service Account Existente de pph-central
 
-Si ya existe una service account con los permisos necesarios, úsala:
+Si ya existe una service account en `pph-central` con los permisos necesarios, úsala:
 
 ```bash
-# Listar service accounts disponibles
+# Listar service accounts disponibles en pph-central
 gcloud iam service-accounts list --project=pph-central
 
 # Usar una service account existente (reemplaza con el email real)
-export SYNC_JOB_SERVICE_ACCOUNT="tu-service-account-existente@pph-central.iam.gserviceaccount.com"
+export SYNC_JOB_SERVICE_ACCOUNT="service-account-existente@pph-central.iam.gserviceaccount.com"
 ./deploy_sync_job.sh
 ```
+
+**Nota:** No puedes usar directamente `etl-servicetitan@platform-partners-des.iam.gserviceaccount.com` porque está en otro proyecto. Necesitas una service account en `pph-central`.
 
 ### Opción 3: Usar Service Account Default del Proyecto
 
