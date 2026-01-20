@@ -147,6 +147,9 @@ def get_all_combinations(client, bronze_tables):
             else:
                 logger.warning(f"⚠️ No se encontró company_project_id para company_id={company_id}")
         
+        # Ordenar por company_id y luego por table_name
+        results.sort(key=lambda x: (x['company_id'], x['table_name']))
+        
         return results
         
     except Exception as e:
