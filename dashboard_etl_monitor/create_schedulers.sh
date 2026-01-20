@@ -2,23 +2,88 @@
 
 # =============================================================================
 # CREAR CLOUD SCHEDULERS PARA SYNC JOB
+# Multi-Environment: DEV, QUA, PRO
 # =============================================================================
 
-set -e
+set -e  # Salir si hay algún error
 
-# Configuración
-PROJECT_ID="pph-central"
+# =============================================================================
+# CONFIGURACIÓN DE AMBIENTES
+# =============================================================================
+
+# Detectar proyecto activo de gcloud
+CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
+
+# Si se proporciona parámetro, usarlo; si no, detectar automáticamente
+if [ -n "$1" ]; then
+    # Parámetro proporcionado explícitamente
+    ENVIRONMENT="$1"
+    ENVIRONMENT=$(echo "$ENVIRONMENT" | tr '[:upper:]' '[:lower:]')  # Convertir a minúsculas
+    
+    # Validar ambiente (aceptar "des" como alias de "dev")
+    if [[ "$ENVIRONMENT" == "des" ]]; then
+        ENVIRONMENT="dev"
+        echo "ℹ️  'des' interpretado como 'dev'"
+    fi
+    
+    # Validar ambiente
+    if [[ ! "$ENVIRONMENT" =~ ^(dev|qua|pro)$ ]]; then
+        echo "❌ Error: Ambiente inválido '$ENVIRONMENT'"
+        echo "Uso: ./create_schedulers.sh [dev|qua|pro]"
+        exit 1
+    fi
+else
+    # Detectar automáticamente según el proyecto activo
+    echo "🔍 Detectando ambiente desde proyecto activo de gcloud..."
+    
+    case "$CURRENT_PROJECT" in
+        platform-partners-des)
+            ENVIRONMENT="dev"
+            echo "✅ Detectado: DEV (platform-partners-des)"
+            ;;
+        platform-partners-qua)
+            ENVIRONMENT="qua"
+            echo "✅ Detectado: QUA (platform-partners-qua)"
+            ;;
+        constant-height-455614-i0)
+            ENVIRONMENT="pro"
+            echo "✅ Detectado: PRO (platform-partners-pro)"
+            ;;
+        *)
+            echo "⚠️  Proyecto activo: ${CURRENT_PROJECT}"
+            echo "⚠️  No se reconoce el proyecto. Usando QUA por defecto."
+            ENVIRONMENT="qua"
+            ;;
+    esac
+fi
+
+# Configuración según ambiente
+case "$ENVIRONMENT" in
+    dev)
+        PROJECT_ID="platform-partners-des"
+        JOB_NAME="update-companies-consolidated-sync-dev"
+        SERVICE_ACCOUNT="etl-servicetitan@platform-partners-des.iam.gserviceaccount.com"
+        ;;
+    qua)
+        PROJECT_ID="platform-partners-qua"
+        JOB_NAME="update-companies-consolidated-sync-qua"
+        SERVICE_ACCOUNT="etl-servicetitan@platform-partners-qua.iam.gserviceaccount.com"
+        ;;
+    pro)
+        PROJECT_ID="constant-height-455614-i0"
+        JOB_NAME="update-companies-consolidated-sync"
+        SERVICE_ACCOUNT="etl-servicetitan@constant-height-455614-i0.iam.gserviceaccount.com"
+        ;;
+esac
+
 REGION="us-east1"
-JOB_NAME="update-companies-consolidated-sync"
-# Service Account: Usar la misma que en deploy_sync_job.sh
-# Si no tienes permisos, déjalo vacío o usa una diferente
-SERVICE_ACCOUNT="${SYNC_JOB_SERVICE_ACCOUNT:-etl-servicetitan@pph-central.iam.gserviceaccount.com}"
 
+# Agregar sufijo de ambiente a los nombres de schedulers
 SCHEDULER_NAMES=(
-    "sync-companies-consolidated-7am"
-    "sync-companies-consolidated-1pm"
-    "sync-companies-consolidated-7pm"
-    "sync-companies-consolidated-1am"
+    "sync-companies-consolidated-7am-${ENVIRONMENT}"
+    "sync-companies-consolidated-1pm-${ENVIRONMENT}"
+    "sync-companies-consolidated-7pm-${ENVIRONMENT}"
+    "sync-companies-consolidated-1am-${ENVIRONMENT}"
 )
 
 CRON_SCHEDULES=(
@@ -30,6 +95,10 @@ CRON_SCHEDULES=(
 
 echo "⏰ CREANDO CLOUD SCHEDULERS"
 echo "==========================="
+echo "🌍 Ambiente: ${ENVIRONMENT^^}"
+echo "📊 Proyecto: ${PROJECT_ID}"
+echo "📦 Job: ${JOB_NAME}"
+echo "🔐 Service Account: ${SERVICE_ACCOUNT}"
 echo ""
 
 for i in "${!SCHEDULER_NAMES[@]}"; do

@@ -1,5 +1,5 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-f', 'Dockerfile.sync', '-t', 'gcr.io/$PROJECT_ID/update-companies-consolidated-sync', '.']
+    args: ['build', '-f', 'Dockerfile.sync', '-t', 'gcr.io/${_PROJECT_ID}/update-companies-consolidated-sync${_ENV_SUFFIX}', '.']
 images:
-  - 'gcr.io/$PROJECT_ID/update-companies-consolidated-sync'
+  - 'gcr.io/${_PROJECT_ID}/update-companies-consolidated-sync${_ENV_SUFFIX}'
