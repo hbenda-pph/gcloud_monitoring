@@ -10,7 +10,9 @@ set -e
 PROJECT_ID="pph-central"
 REGION="us-east1"
 JOB_NAME="update-companies-consolidated-sync"
-SERVICE_ACCOUNT="etl-servicetitan@pph-central.iam.gserviceaccount.com"
+# Service Account: Usar la misma que en deploy_sync_job.sh
+# Si no tienes permisos, déjalo vacío o usa una diferente
+SERVICE_ACCOUNT="${SYNC_JOB_SERVICE_ACCOUNT:-etl-servicetitan@pph-central.iam.gserviceaccount.com}"
 
 SCHEDULER_NAMES=(
     "sync-companies-consolidated-7am"
@@ -39,26 +41,50 @@ for i in "${!SCHEDULER_NAMES[@]}"; do
     # Verificar si existe
     if gcloud scheduler jobs describe ${SCHEDULER_NAME} --location=${REGION} --project=${PROJECT_ID} &> /dev/null; then
         echo "   📝 Actualizando scheduler existente..."
-        gcloud scheduler jobs update http ${SCHEDULER_NAME} \
-            --location=${REGION} \
-            --project=${PROJECT_ID} \
-            --schedule="${CRON_SCHEDULE}" \
-            --time-zone="America/New_York" \
-            --http-method=POST \
-            --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
-            --oauth-service-account-email=${SERVICE_ACCOUNT} \
-            --quiet
+        if [ -n "${SERVICE_ACCOUNT}" ]; then
+            gcloud scheduler jobs update http ${SCHEDULER_NAME} \
+                --location=${REGION} \
+                --project=${PROJECT_ID} \
+                --schedule="${CRON_SCHEDULE}" \
+                --time-zone="America/New_York" \
+                --http-method=POST \
+                --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
+                --oauth-service-account-email=${SERVICE_ACCOUNT} \
+                --quiet
+        else
+            echo "   ⚠️  No se especificó SERVICE_ACCOUNT, usando la default del proyecto"
+            gcloud scheduler jobs update http ${SCHEDULER_NAME} \
+                --location=${REGION} \
+                --project=${PROJECT_ID} \
+                --schedule="${CRON_SCHEDULE}" \
+                --time-zone="America/New_York" \
+                --http-method=POST \
+                --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
+                --quiet
+        fi
     else
         echo "   🆕 Creando nuevo scheduler..."
-        gcloud scheduler jobs create http ${SCHEDULER_NAME} \
-            --location=${REGION} \
-            --project=${PROJECT_ID} \
-            --schedule="${CRON_SCHEDULE}" \
-            --time-zone="America/New_York" \
-            --http-method=POST \
-            --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
-            --oauth-service-account-email=${SERVICE_ACCOUNT} \
-            --quiet
+        if [ -n "${SERVICE_ACCOUNT}" ]; then
+            gcloud scheduler jobs create http ${SCHEDULER_NAME} \
+                --location=${REGION} \
+                --project=${PROJECT_ID} \
+                --schedule="${CRON_SCHEDULE}" \
+                --time-zone="America/New_York" \
+                --http-method=POST \
+                --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
+                --oauth-service-account-email=${SERVICE_ACCOUNT} \
+                --quiet
+        else
+            echo "   ⚠️  No se especificó SERVICE_ACCOUNT, usando la default del proyecto"
+            gcloud scheduler jobs create http ${SCHEDULER_NAME} \
+                --location=${REGION} \
+                --project=${PROJECT_ID} \
+                --schedule="${CRON_SCHEDULE}" \
+                --time-zone="America/New_York" \
+                --http-method=POST \
+                --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${JOB_NAME}:run" \
+                --quiet
+        fi
     fi
     
     if [ $? -eq 0 ]; then

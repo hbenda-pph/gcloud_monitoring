@@ -11,7 +11,9 @@ set -e
 PROJECT_ID="pph-central"
 REGION="us-east1"
 JOB_NAME="update-companies-consolidated-sync"
-SERVICE_ACCOUNT="etl-servicetitan@pph-central.iam.gserviceaccount.com"
+# Service Account: Si no tienes permisos para usar etl-servicetitan, déjalo vacío para usar la default
+# O cambia a una service account que sí tengas permisos para usar
+SERVICE_ACCOUNT="${SYNC_JOB_SERVICE_ACCOUNT:-etl-servicetitan@pph-central.iam.gserviceaccount.com}"
 IMAGE_NAME="gcr.io/${PROJECT_ID}/${JOB_NAME}"
 
 echo "🚀 DEPLOY SYNC JOB"
@@ -39,26 +41,50 @@ echo "======================================="
 # Verificar si el job ya existe
 if gcloud run jobs describe ${JOB_NAME} --region=${REGION} --project=${PROJECT_ID} &> /dev/null; then
     echo "📝 Job existe, actualizando..."
-    gcloud run jobs update ${JOB_NAME} \
-        --image ${IMAGE_NAME} \
-        --region ${REGION} \
-        --project ${PROJECT_ID} \
-        --service-account ${SERVICE_ACCOUNT} \
-        --max-retries 3 \
-        --task-timeout 600s \
-        --memory 2Gi \
-        --cpu 2
+    if [ -n "${SERVICE_ACCOUNT}" ]; then
+        gcloud run jobs update ${JOB_NAME} \
+            --image ${IMAGE_NAME} \
+            --region ${REGION} \
+            --project ${PROJECT_ID} \
+            --service-account ${SERVICE_ACCOUNT} \
+            --max-retries 3 \
+            --task-timeout 600s \
+            --memory 2Gi \
+            --cpu 2
+    else
+        echo "⚠️  No se especificó SERVICE_ACCOUNT, usando la default del proyecto"
+        gcloud run jobs update ${JOB_NAME} \
+            --image ${IMAGE_NAME} \
+            --region ${REGION} \
+            --project ${PROJECT_ID} \
+            --max-retries 3 \
+            --task-timeout 600s \
+            --memory 2Gi \
+            --cpu 2
+    fi
 else
     echo "🆕 Job no existe, creando..."
-    gcloud run jobs create ${JOB_NAME} \
-        --image ${IMAGE_NAME} \
-        --region ${REGION} \
-        --project ${PROJECT_ID} \
-        --service-account ${SERVICE_ACCOUNT} \
-        --max-retries 3 \
-        --task-timeout 600s \
-        --memory 2Gi \
-        --cpu 2
+    if [ -n "${SERVICE_ACCOUNT}" ]; then
+        gcloud run jobs create ${JOB_NAME} \
+            --image ${IMAGE_NAME} \
+            --region ${REGION} \
+            --project ${PROJECT_ID} \
+            --service-account ${SERVICE_ACCOUNT} \
+            --max-retries 3 \
+            --task-timeout 600s \
+            --memory 2Gi \
+            --cpu 2
+    else
+        echo "⚠️  No se especificó SERVICE_ACCOUNT, usando la default del proyecto"
+        gcloud run jobs create ${JOB_NAME} \
+            --image ${IMAGE_NAME} \
+            --region ${REGION} \
+            --project ${PROJECT_ID} \
+            --max-retries 3 \
+            --task-timeout 600s \
+            --memory 2Gi \
+            --cpu 2
+    fi
 fi
 
 if [ $? -eq 0 ]; then
