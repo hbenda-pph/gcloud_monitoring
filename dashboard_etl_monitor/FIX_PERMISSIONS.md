@@ -23,13 +23,22 @@ gcloud iam service-accounts create etl-servicetitan \
   --description="Service account para actualizar companies_consolidated" \
   --project=pph-central
 
-# Darle permisos de BigQuery (necesita crear jobs y editar datos)
+# IMPORTANTE: Las service accounts de los proyectos de código (dev/qua/pro) 
+# necesitan permisos para escribir en pph-central
+# 
+# Para DEV:
 gcloud projects add-iam-policy-binding pph-central \
-  --member="serviceAccount:etl-servicetitan@pph-central.iam.gserviceaccount.com" \
-  --role="roles/bigquery.jobUser"
+  --member="serviceAccount:etl-servicetitan@platform-partners-des.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataEditor"
 
+# Para QUA:
 gcloud projects add-iam-policy-binding pph-central \
-  --member="serviceAccount:etl-servicetitan@pph-central.iam.gserviceaccount.com" \
+  --member="serviceAccount:etl-servicetitan@platform-partners-qua.iam.gserviceaccount.com" \
+  --role="roles/bigquery.dataEditor"
+
+# Para PRO:
+gcloud projects add-iam-policy-binding pph-central \
+  --member="serviceAccount:etl-servicetitan@constant-height-455614-i0.iam.gserviceaccount.com" \
   --role="roles/bigquery.dataEditor"
 
 # Darle permisos para leer tablas en otros proyectos (necesario para leer bronze)
