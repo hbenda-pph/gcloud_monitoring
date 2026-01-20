@@ -174,7 +174,7 @@ def get_companies():
                 company_project_id
             FROM `{PROJECT_ID}.settings.companies`
             WHERE company_fivetran_status = TRUE
-            ORDER BY company_name
+            ORDER BY company_id
         """
         
         df = client.query(query).to_dataframe()
@@ -322,6 +322,9 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     error_log = []  # Para registrar errores si debug_mode está activo
     sql_log = []  # Para registrar las queries SQL ejecutadas
     
+    # Crear mapeo de company_name a company_id para ordenar después
+    company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
+    
     # Barra de progreso
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -329,6 +332,7 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     current_cell = 0
     
     # Iterar sobre cada COMPAÑÍA (serán las FILAS de la matriz)
+    # companies_df ya está ordenado por company_id desde la query
     for _, company in companies_df.iterrows():
         company_name = company['company_name']
         project_id = company['company_project_id']
@@ -390,6 +394,12 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     #   - Valores = timestamps
     matrix_df = pd.DataFrame(matrix_data).T
     matrix_df.index.name = 'Compañía'
+    
+    # Ordenar por company_id (mantener el orden de companies_df)
+    # Crear una columna temporal con company_id para ordenar
+    matrix_df['_sort_order'] = matrix_df.index.map(company_id_map)
+    matrix_df = matrix_df.sort_values('_sort_order')
+    matrix_df = matrix_df.drop('_sort_order', axis=1)
     
     return matrix_df
 
