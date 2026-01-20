@@ -2,10 +2,11 @@
 Script para actualizar last_etl_synced y row_count en companies_consolidated
 
 Este script:
-1. Obtiene todas las combinaciones company_id + table_name desde companies_consolidated
-2. Para cada combinación, obtiene el company_project_id
-3. Calcula MAX(_etl_synced) y COUNT(*) desde {company_project_id}.bronze.{table_name}
-4. Actualiza companies_consolidated con esos valores
+1. Obtiene las 11 tablas de Bronze desde metadata (silver_use_bronze = TRUE)
+2. Obtiene combinaciones company_id + table_name desde companies_consolidated (solo para las 11 tablas)
+3. Para cada combinación, obtiene el company_project_id
+4. Calcula MAX(_etl_synced) y COUNT(*) desde {company_project_id}.bronze.{table_name}
+5. Actualiza companies_consolidated con esos valores
 
 Ejecutar como Scheduled Query o Cloud Function:
 - Horarios: 7am, 1pm, 7pm, 1am (1 hora después del ETL)
@@ -20,16 +21,52 @@ CENTRAL_PROJECT = "pph-central"
 CENTRAL_DATASET = "settings"
 CONSOLIDATED_TABLE = "companies_consolidated"
 COMPANIES_TABLE = "companies"  # Se buscará en cada project_id
+METADATA_PROJECT = "pph-central"
+METADATA_DATASET = "management"
+METADATA_TABLE = "metadata_consolidated_tables"
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_all_combinations(client):
+def get_bronze_tables(client):
     """
-    Obtiene todas las combinaciones company_id + table_name desde companies_consolidated.
+    Obtiene las 11 tablas de Bronze desde metadata (las que tienen silver_use_bronze = TRUE).
+    
+    Retorna:
+        Lista de nombres de tablas (máximo 11)
+    """
+    query = f"""
+        SELECT 
+            table_name
+        FROM `{METADATA_PROJECT}.{METADATA_DATASET}.{METADATA_TABLE}`
+        WHERE endpoint IS NOT NULL
+          AND active = TRUE
+          AND silver_use_bronze = TRUE
+        ORDER BY table_name
+        LIMIT 11
+    """
+    
+    try:
+        df = client.query(query).to_dataframe()
+        tables = df['table_name'].tolist()
+        logger.info(f"📋 Encontradas {len(tables)} tablas de Bronze en metadata")
+        return tables[:11] if len(tables) > 11 else tables
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo tablas desde metadata: {str(e)}")
+        return []
+
+
+def get_all_combinations(client, bronze_tables):
+    """
+    Obtiene las combinaciones company_id + table_name desde companies_consolidated,
+    pero SOLO para las tablas de Bronze (las 11 tablas).
     Luego obtiene el company_project_id para cada company_id desde cualquiera de los proyectos.
+    
+    Args:
+        client: Cliente BigQuery
+        bronze_tables: Lista de nombres de tablas de Bronze (las 11 tablas)
     
     Retorna:
         Lista de dicts: [{
@@ -38,12 +75,18 @@ def get_all_combinations(client):
             'company_project_id': str
         }]
     """
-    # Primero obtener todas las combinaciones únicas desde companies_consolidated
+    if not bronze_tables:
+        logger.warning("⚠️ No hay tablas de Bronze para procesar")
+        return []
+    
+    # Filtrar solo las combinaciones de las 11 tablas de Bronze
+    tables_list = "', '".join(bronze_tables)
     query_combinations = f"""
         SELECT DISTINCT
             company_id,
             table_name
         FROM `{CENTRAL_PROJECT}.{CENTRAL_DATASET}.{CONSOLIDATED_TABLE}`
+        WHERE table_name IN ('{tables_list}')
         ORDER BY company_id, table_name
     """
     
@@ -146,7 +189,12 @@ def get_sync_data(client, company_project_id, table_name):
             'row_count': int(result.iloc[0]['row_count'])
         }
     except Exception as e:
-        logger.warning(f"Error obteniendo sync data para {table_ref}: {str(e)}")
+        # Si la tabla no existe, solo loguear y retornar None (no es un error crítico)
+        error_msg = str(e)
+        if "not found" in error_msg.lower() or "notfound" in error_msg.lower():
+            logger.debug(f"ℹ️  Tabla {table_ref} no existe en Bronze (puede ser normal)")
+        else:
+            logger.warning(f"⚠️ Error obteniendo sync data para {table_ref}: {error_msg}")
         return {'max_sync': None, 'row_count': 0}
 
 
@@ -205,9 +253,19 @@ def main():
     #       en todos los proyectos (pph-central y los company_project_id)
     client = bigquery.Client(project=CENTRAL_PROJECT)
     
-    # Obtener todas las combinaciones desde companies_consolidated
-    logger.info("📊 Obteniendo todas las combinaciones company_id + table_name...")
-    combinations = get_all_combinations(client)
+    # Obtener las 11 tablas de Bronze desde metadata
+    logger.info("📊 Obteniendo tablas de Bronze desde metadata...")
+    bronze_tables = get_bronze_tables(client)
+    
+    if not bronze_tables:
+        logger.error("❌ No se encontraron tablas de Bronze en metadata")
+        return
+    
+    logger.info(f"✅ Tablas de Bronze a procesar: {', '.join(bronze_tables)}")
+    
+    # Obtener combinaciones solo para las tablas de Bronze
+    logger.info("📊 Obteniendo combinaciones company_id + table_name (solo tablas de Bronze)...")
+    combinations = get_all_combinations(client, bronze_tables)
     
     if not combinations:
         logger.error("❌ No se encontraron combinaciones para procesar")
