@@ -26,10 +26,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def get_companies_and_tables(client, project_id):
+def get_all_combinations(client):
     """
-    Obtiene todas las combinaciones company_id + table_name 
-    desde companies_consolidated y sus company_project_id correspondientes.
+    Obtiene todas las combinaciones company_id + table_name desde companies_consolidated.
+    Luego obtiene el company_project_id para cada company_id desde cualquiera de los proyectos.
     
     Retorna:
         Lista de dicts: [{
@@ -38,23 +38,76 @@ def get_companies_and_tables(client, project_id):
             'company_project_id': str
         }]
     """
-    query = f"""
+    # Primero obtener todas las combinaciones únicas desde companies_consolidated
+    query_combinations = f"""
         SELECT DISTINCT
-            cc.company_id,
-            cc.table_name,
-            c.company_project_id
-        FROM `{CENTRAL_PROJECT}.{CENTRAL_DATASET}.{CONSOLIDATED_TABLE}` cc
-        INNER JOIN `{project_id}.{CENTRAL_DATASET}.{COMPANIES_TABLE}` c
-            ON cc.company_id = c.company_id
-        WHERE c.company_fivetran_status = TRUE
-        ORDER BY cc.company_id, cc.table_name
+            company_id,
+            table_name
+        FROM `{CENTRAL_PROJECT}.{CENTRAL_DATASET}.{CONSOLIDATED_TABLE}`
+        ORDER BY company_id, table_name
     """
     
     try:
-        df = client.query(query).to_dataframe()
-        return df.to_dict('records')
+        df_combinations = client.query(query_combinations).to_dataframe()
+        if df_combinations.empty:
+            logger.warning("⚠️ No se encontraron combinaciones en companies_consolidated")
+            return []
+        
+        logger.info(f"📋 Encontradas {len(df_combinations)} combinaciones en companies_consolidated")
+        
+        # Obtener company_project_id para cada company_id único
+        # Intentar desde cada proyecto hasta encontrar el company_id
+        unique_company_ids = df_combinations['company_id'].unique().tolist()
+        company_project_map = {}
+        
+        environments = [
+            "platform-partners-des",
+            "platform-partners-qua",
+            "constant-height-455614-i0"
+        ]
+        
+        for env_project_id in environments:
+            if len(company_project_map) == len(unique_company_ids):
+                break  # Ya encontramos todos
+            
+            query_companies = f"""
+                SELECT 
+                    company_id,
+                    company_project_id
+                FROM `{env_project_id}.{CENTRAL_DATASET}.{COMPANIES_TABLE}`
+                WHERE company_fivetran_status = TRUE
+                  AND company_id IN ({','.join(map(str, unique_company_ids))})
+            """
+            
+            try:
+                df_companies = client.query(query_companies).to_dataframe()
+                for _, row in df_companies.iterrows():
+                    if row['company_id'] not in company_project_map:
+                        company_project_map[row['company_id']] = row['company_project_id']
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo obtener companies desde {env_project_id}: {str(e)}")
+                continue
+        
+        # Combinar resultados
+        results = []
+        for _, row in df_combinations.iterrows():
+            company_id = row['company_id']
+            table_name = row['table_name']
+            company_project_id = company_project_map.get(company_id)
+            
+            if company_project_id:
+                results.append({
+                    'company_id': company_id,
+                    'table_name': table_name,
+                    'company_project_id': company_project_id
+                })
+            else:
+                logger.warning(f"⚠️ No se encontró company_project_id para company_id={company_id}")
+        
+        return results
+        
     except Exception as e:
-        logger.error(f"Error obteniendo compañías y tablas: {str(e)}")
+        logger.error(f"❌ Error obteniendo combinaciones: {str(e)}")
         return []
 
 
@@ -152,52 +205,43 @@ def main():
     #       en todos los proyectos (pph-central y los company_project_id)
     client = bigquery.Client(project=CENTRAL_PROJECT)
     
-    # Obtener todas las combinaciones
-    # NOTA: Necesitas iterar sobre los 3 ambientes (dev, qua, pro)
-    #       o tener una forma de obtener todos los company_project_id
-    environments = [
-        "platform-partners-des",  # DEV
-        "platform-partners-qua",  # QUA
-        "constant-height-455614-i0"  # PRO
-    ]
+    # Obtener todas las combinaciones desde companies_consolidated
+    logger.info("📊 Obteniendo todas las combinaciones company_id + table_name...")
+    combinations = get_all_combinations(client)
+    
+    if not combinations:
+        logger.error("❌ No se encontraron combinaciones para procesar")
+        return
+    
+    logger.info(f"📋 Encontradas {len(combinations)} combinaciones para procesar")
     
     total_updated = 0
     total_errors = 0
     
-    for env_project_id in environments:
-        logger.info(f"📊 Procesando ambiente: {env_project_id}")
+    # Procesar cada combinación
+    for combo in combinations:
+        company_id = combo['company_id']
+        table_name = combo['table_name']
+        company_project_id = combo['company_project_id']
         
-        # Obtener combinaciones para este ambiente
-        combinations = get_companies_and_tables(client, env_project_id)
+        logger.info(f"🔄 Procesando: company_id={company_id}, table={table_name}, project={company_project_id}")
         
-        if not combinations:
-            logger.warning(f"⚠️ No se encontraron combinaciones para {env_project_id}")
-            continue
+        # Obtener datos de sincronización
+        sync_data = get_sync_data(client, company_project_id, table_name)
         
-        logger.info(f"📋 Encontradas {len(combinations)} combinaciones para {env_project_id}")
-        
-        # Procesar cada combinación
-        for combo in combinations:
-            company_id = combo['company_id']
-            table_name = combo['table_name']
-            company_project_id = combo['company_project_id']
-            
-            # Obtener datos de sincronización
-            sync_data = get_sync_data(client, company_project_id, table_name)
-            
-            # Actualizar companies_consolidated
-            try:
-                update_companies_consolidated(
-                    client,
-                    company_id,
-                    table_name,
-                    sync_data['max_sync'],
-                    sync_data['row_count']
-                )
-                total_updated += 1
-            except Exception as e:
-                logger.error(f"❌ Error procesando {company_id}/{table_name}: {str(e)}")
-                total_errors += 1
+        # Actualizar companies_consolidated
+        try:
+            update_companies_consolidated(
+                client,
+                company_id,
+                table_name,
+                sync_data['max_sync'],
+                sync_data['row_count']
+            )
+            total_updated += 1
+        except Exception as e:
+            logger.error(f"❌ Error procesando {company_id}/{table_name}: {str(e)}")
+            total_errors += 1
     
     logger.info(f"✅ Proceso completado: {total_updated} actualizados, {total_errors} errores")
 

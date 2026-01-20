@@ -23,7 +23,11 @@ gcloud iam service-accounts create etl-servicetitan \
   --description="Service account para actualizar companies_consolidated" \
   --project=pph-central
 
-# Darle permisos de BigQuery
+# Darle permisos de BigQuery (necesita crear jobs y editar datos)
+gcloud projects add-iam-policy-binding pph-central \
+  --member="serviceAccount:etl-servicetitan@pph-central.iam.gserviceaccount.com" \
+  --role="roles/bigquery.jobUser"
+
 gcloud projects add-iam-policy-binding pph-central \
   --member="serviceAccount:etl-servicetitan@pph-central.iam.gserviceaccount.com" \
   --role="roles/bigquery.dataEditor"
