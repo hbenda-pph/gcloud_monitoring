@@ -1,0 +1,88 @@
+# cloudbuild.yaml para IAM Access Monitor
+# Desploy en Cloud Run del dashboard
+
+steps:
+  # Paso 1: Construir imagen Docker
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:${SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:latest'
+      - '-f'
+      - 'Dockerfile.iam_monitor'
+      - '.'
+
+  # Paso 2: Subir imagen a Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:${SHORT_SHA}'
+
+  # Paso 3: Desplegar en Cloud Run
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    id: 'deploy-service'
+    env:
+      - 'CLOUDSDK_COMPUTE_REGION=${_REGION}'
+      - 'CLOUDSDK_RUN_PLATFORM=managed'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:${SHORT_SHA}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--max-instances'
+      - '${_MAX_INSTANCES}'
+      - '--memory'
+      - '${_MEMORY}'
+      - '--cpu'
+      - '${_CPU}'
+      - '--timeout'
+      - '${_TIMEOUT}'
+      - '--set-env-vars'
+      - 'ENVIRONMENT=${_ENVIRONMENT}'
+
+  # Paso 4: Mostrar logs
+  - name: 'gcr.io/cloud-builders/gke-deploy'
+    id: 'show-logs'
+    args:
+      - 'run'
+      - 'services'
+      - 'describe'
+      - '${_SERVICE_NAME}'
+      - '--region'
+      - '${_REGION}'
+      - '--platform'
+      - 'managed'
+
+# Sustituciones (valores por defecto)
+substitutions:
+  _SERVICE_NAME: 'iam-access-monitor'
+  _REGION: 'us-central1'
+  _REGISTRY: 'cloud-run-services'
+  _ENVIRONMENT: 'production'
+  _CPU: '1'
+  _MEMORY: '2Gi'
+  _MAX_INSTANCES: '10'
+  _TIMEOUT: '3600'
+
+# Opciones
+options:
+  machineType: 'N1_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+  
+# Imágenes a guardar
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:${SHORT_SHA}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REGISTRY}/${_SERVICE_NAME}:latest'
+
+# Configuración
+timeout: '1800s'
