@@ -1,4 +1,7 @@
 streamlit>=1.28.0
 pandas>=2.0.0
 google-cloud-bigquery>=3.11.0
+google-cloud-iam>=2.11.0
+google-cloud-resource-manager>=1.10.0
 db-dtypes>=1.2.0
+pyarrow>=11.0.0
