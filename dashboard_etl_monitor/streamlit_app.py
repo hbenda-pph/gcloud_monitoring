@@ -414,6 +414,11 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     matrix_df = matrix_df.sort_values('_sort_order')
     matrix_df = matrix_df.drop('_sort_order', axis=1)
     
+    # IMPORTANTE: Reordenar las columnas (Endpoints) en el orden alfabético original
+    # (El paralelismo altera el orden de inserción y las columnas salen desordenadas)
+    columns_ordered = [t for t in tables_list if t in matrix_df.columns]
+    matrix_df = matrix_df[columns_ordered]
+    
     return matrix_df
 
 # ========== FORMATO PARA VISUALIZACIÓN ==========
