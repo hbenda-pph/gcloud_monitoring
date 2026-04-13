@@ -462,6 +462,12 @@ st.markdown("""
     [data-testid="stSidebar"] .stMarkdown {margin: 0.2rem 0 !important; line-height: 1.2 !important;}
     [data-testid="stSidebar"] p {margin: 0.1rem 0 !important; font-size: 0.85rem !important;}
     [data-testid="stSidebar"] .stCaption {margin: 0.1rem 0 !important; font-size: 0.75rem !important;}
+    
+    /* Configuración para que la tabla quepa sin scroll (Vista de Pájaro) */
+    [data-testid="stTable"] {overflow: visible !important; display: flex !important; justify-content: center !important;}
+    table {font-size: 0.75rem !important; width: 100% !important;}
+    th {font-size: 0.7rem !important; padding: 0.2rem 0.2rem !important; white-space: nowrap !important; text-align: center !important;}
+    td {padding: 0.2rem 0.2rem !important; white-space: nowrap !important; text-align: center !important;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -549,8 +555,8 @@ display_df = matrix_df.copy()
 for col in display_df.columns:
     display_df[col] = display_df[col].apply(format_timestamp_for_display)
 
-# Mostrar la matriz completa con st.dataframe para permitir scroll
-st.dataframe(display_df, use_container_width=True)
+# Mostrar la matriz usando st.table() con CSS personalizado para evitar scroll
+st.table(display_df)
 
 # ========== ESTADÍSTICAS ==========
 st.markdown("**📈 Estadísticas**")
