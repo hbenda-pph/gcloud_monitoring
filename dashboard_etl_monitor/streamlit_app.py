@@ -10,6 +10,7 @@ from datetime import datetime
 from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 import os
+import concurrent.futures
 
 # ========== CONFIGURACIÓN ==========
 st.set_page_config(
@@ -315,33 +316,48 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
             - Columnas = nombres de tablas
             - Valores = timestamps de MAX(_etl_synced) o None
     """
-    # Estructura: {company_name: {table_name: timestamp}}
-    matrix_data = {}
+    # Estructura inicializada
+    matrix_data = {company['company_name']: {} for _, company in companies_df.iterrows()}
     error_log = []  # Para registrar errores si debug_mode está activo
     sql_log = []  # Para registrar las queries SQL ejecutadas
     
     # Crear mapeo de company_name a company_id para ordenar después
     company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
     
-    # Barra de progreso
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_cells = len(companies_df) * len(tables_list)
-    current_cell = 0
-    
-    # Iterar sobre cada COMPAÑÍA (serán las FILAS de la matriz)
-    # companies_df ya está ordenado por company_id desde la query
+    # Preparar lista de tareas
+    tasks = []
     for _, company in companies_df.iterrows():
         company_name = company['company_name']
         project_id = company['company_project_id']
-        row_data = {}
-        
-        # Iterar sobre cada TABLA (serán las COLUMNAS de la matriz)
         for table_name in tables_list:
-            # Obtener último timestamp de sincronización
-            result = get_last_sync_timestamp(project_id, table_name, debug_mode=debug_mode)
+            tasks.append({
+                'company_name': company_name,
+                'project_id': project_id,
+                'table_name': table_name
+            })
             
-            # Si debug_mode, capturar la query SQL
+    # Barra de progreso
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    total_cells = len(tasks)
+    current_cell = 0
+    
+    # Función auxiliar para el hilo
+    def _fetch_task(task):
+        res = get_last_sync_timestamp(task['project_id'], task['table_name'], debug_mode=debug_mode)
+        return task, res
+        
+    # Procesamiento en paralelo
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(_fetch_task, task): task for task in tasks}
+        
+        for future in concurrent.futures.as_completed(futures):
+            task, result = future.result()
+            company_name = task['company_name']
+            table_name = task['table_name']
+            project_id = task['project_id']
+            
+            # Si debug_mode, reconstruimos el log
             if debug_mode:
                 table_ref = f"{project_id}.bronze.{table_name}"
                 sql_query = f"SELECT MAX(_etl_synced) as max_sync FROM `{table_ref}` WHERE _etl_synced IS NOT NULL"
@@ -355,16 +371,15 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
             else:
                 last_sync = result
             
-            row_data[table_name] = last_sync
+            # Guardamos el resultado en la matriz
+            matrix_data[company_name][table_name] = last_sync
             
             # Actualizar progreso
             current_cell += 1
             progress = current_cell / total_cells
             progress_bar.progress(progress)
-            status_text.text(f"Procesando: {company_name} - {table_name} ({current_cell}/{total_cells})")
-        
-        # Guardar la fila completa para esta compañía
-        matrix_data[company_name] = row_data
+            status_text.text(f"Procesando en paralelo: {company_name} - {table_name} ({current_cell}/{total_cells})")
+    
     
     progress_bar.empty()
     status_text.empty()
