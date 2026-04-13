@@ -1,7 +1,7 @@
 """
 Dashboard de Monitoreo ETL ServiceTitan
 Matriz: Compañías (Y) vs Tablas (X) con MAX(_etl_synced)
-Monitoreo de las 11 tablas de Bronze
+Monitoreo de todas las tablas de Bronze
 """
 
 import streamlit as st
@@ -189,10 +189,10 @@ def get_companies():
 @st.cache_data(ttl=3600)  # Cache por 1 hora (metadata cambia poco)
 def get_tables_from_metadata():
     """
-    Obtiene las 11 tablas de Bronze desde metadata.
+    Obtiene todas las tablas de Bronze desde metadata.
     
     Retorna:
-        Lista de nombres de tablas ordenadas (máximo 11 tablas)
+        Lista de nombres de tablas ordenadas
     """
     try:
         client = get_bigquery_client(METADATA_PROJECT)
@@ -205,14 +205,12 @@ def get_tables_from_metadata():
               AND active = TRUE
               AND silver_use_bronze = TRUE
             ORDER BY table_name
-            LIMIT 11
         """
         
         df = client.query(query).to_dataframe()
         tables = df['table_name'].tolist()
         
-        # Si hay más de 11, tomar solo las primeras 11
-        return tables[:11] if len(tables) > 11 else tables
+        return tables
         
     except Exception as e:
         st.error(f"❌ Error obteniendo tablas desde metadata: {str(e)}")
@@ -308,7 +306,7 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
     
     Args:
         companies_df: DataFrame con compañías (debe tener company_project_id)
-        tables_list: Lista de nombres de tablas (las 11 tablas de Bronze)
+        tables_list: Lista de nombres de tablas de Bronze
         debug_mode: Si es True, muestra información detallada de errores
         
     Retorna:
@@ -437,17 +435,17 @@ def format_timestamp_for_display(ts):
         # Formatear según antigüedad
         if days_diff >= 2:
             # Rojo: Más de 2 días (>= 2 días)
-            return f"🔴 {ts.strftime('%Y-%m-%d %H:%M')}"
+            return f"🔴 {ts.strftime('%m-%d %H:%M')}"
         elif days_diff >= 1:
             # Amarillo: Más de 1 día (>= 1 día y < 2 días)
-            return f"🟡 {ts.strftime('%Y-%m-%d %H:%M')}"
+            return f"🟡 {ts.strftime('%m-%d %H:%M')}"
         else:
             # Verde: Menos de 1 día (últimas 24 horas)
             return f"🟢 {ts.strftime('%m-%d %H:%M')}"
     except Exception:
         # Si hay error al formatear, mostrar solo la fecha
         try:
-            return f"📅 {ts.strftime('%Y-%m-%d')}"
+            return f"📅 {ts.strftime('%m-%d %H:%M')}"
         except:
             return str(ts)
 
@@ -464,9 +462,6 @@ st.markdown("""
     [data-testid="stSidebar"] .stMarkdown {margin: 0.2rem 0 !important; line-height: 1.2 !important;}
     [data-testid="stSidebar"] p {margin: 0.1rem 0 !important; font-size: 0.85rem !important;}
     [data-testid="stSidebar"] .stCaption {margin: 0.1rem 0 !important; font-size: 0.75rem !important;}
-    /* Eliminar scroll de tablas */
-    .stDataFrame {overflow: visible !important;}
-    .stDataFrame > div {overflow: visible !important; max-height: none !important;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -554,8 +549,8 @@ display_df = matrix_df.copy()
 for col in display_df.columns:
     display_df[col] = display_df[col].apply(format_timestamp_for_display)
 
-# Mostrar la matriz sin scroll usando st.table() que no tiene scroll
-st.table(display_df)
+# Mostrar la matriz completa con st.dataframe para permitir scroll
+st.dataframe(display_df, use_container_width=True)
 
 # ========== ESTADÍSTICAS ==========
 st.markdown("**📈 Estadísticas**")
