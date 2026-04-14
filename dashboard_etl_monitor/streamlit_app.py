@@ -716,23 +716,34 @@ st.table(display_df)
 st.markdown("**📈 Estadísticas**")
 col1, col2, col3 = st.columns(3)
 
+# Función auxiliar para contar celdas válidas (que tienen max_sync)
+def is_synced(cell):
+    return cell is not None and isinstance(cell, dict) and cell.get('max_sync') is not None and not pd.isna(cell.get('max_sync'))
+
 with col1:
     total_cells = len(tables_list) * len(companies_df)
-    synced_cells = matrix_df.notna().sum().sum()
+    # Contar celdas que tienen data
+    synced_cells = 0
+    for col in processed_matrix.columns:
+        synced_cells += processed_matrix[col].apply(is_synced).sum()
     st.metric("Tablas Sincronizadas", f"{synced_cells}/{total_cells}")
 
 with col2:
     recent_syncs = 0
-    now = datetime.now()
-    for col in matrix_df.columns:
-        for val in matrix_df[col]:
-            if val is not None and not pd.isna(val):
+    now = datetime.now(pytz.utc) # Comparar en UTC
+    for col in processed_matrix.columns:
+        for val in processed_matrix[col]:
+            if is_synced(val):
                 try:
-                    if isinstance(val, pd.Timestamp):
-                        val = val.to_pydatetime()
-                    if hasattr(val, 'tzinfo') and val.tzinfo is not None:
-                        val = val.replace(tzinfo=None)
-                    time_diff = now - val
+                    ts = val['max_sync']
+                    if isinstance(ts, pd.Timestamp):
+                        ts = ts.to_pydatetime()
+                    
+                    # Asegurar que ts sea aware
+                    if ts.tzinfo is None:
+                        ts = pytz.utc.localize(ts)
+                    
+                    time_diff = now - ts
                     if time_diff.days <= 1:
                         recent_syncs += 1
                 except:
