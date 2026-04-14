@@ -11,6 +11,8 @@ from google.cloud import bigquery
 from google.api_core.exceptions import NotFound
 import os
 import concurrent.futures
+import pytz
+from datetime import timedelta
 
 # ========== CONFIGURACIÓN ==========
 st.set_page_config(
@@ -154,6 +156,21 @@ def get_bigquery_client(project_id):
     """
     return bigquery.Client(project=project_id)
 
+def to_est(ts):
+    """
+    Convierte un timestamp (aware o naive) a la zona horaria EST (America/New_York).
+    """
+    if ts is None or pd.isna(ts):
+        return None
+    
+    # Asegurar que sea aware (si es naive, asumir UTC)
+    if ts.tzinfo is None:
+        ts = pytz.utc.localize(ts)
+    
+    # Convertir a EST
+    est = pytz.timezone('America/New_York')
+    return ts.astimezone(est)
+
 # ========== PASO 1: OBTENER COMPAÑÍAS ==========
 
 @st.cache_data(ttl=300)  # Cache por 5 minutos
@@ -216,6 +233,37 @@ def get_tables_from_metadata():
     except Exception as e:
         st.error(f"❌ Error obteniendo tablas desde metadata: {str(e)}")
         return []
+
+@st.cache_data(ttl=900)  # Cache por 15 minutos para la carga rápida
+def get_snapshot_matrix():
+    """
+    Obtiene la última fotografía completa desde la tabla de snapshot.
+    """
+    try:
+        PROJECT_ID = get_bigquery_project_id()
+        client = get_bigquery_client(PROJECT_ID)
+        
+        query = f"""
+            SELECT 
+                company_id,
+                endpoint_name,
+                max_sync,
+                actual_rows,
+                actual_duration,
+                actual_status,
+                last_rows,
+                last_duration,
+                last_status,
+                updated_at
+            FROM `{METADATA_PROJECT}.{METADATA_DATASET}.etl_monitoring_snapshot`
+        """
+        
+        df = client.query(query).to_dataframe()
+        return df
+        
+    except Exception as e:
+        # No mostrar error intrusivo si la tabla no existe aún, solo log en terminal/debug
+        return pd.DataFrame()
 
 # ========== PASO 3: OBTENER MAX(_etl_synced) POR TABLA ==========
 
@@ -423,51 +471,73 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
 
 # ========== FORMATO PARA VISUALIZACIÓN ==========
 
-def format_timestamp_for_display(ts):
+def format_cell_data(data, show_rows=True, show_duration=True, show_delta=True):
     """
-    Formatea el timestamp para mostrar en la matriz con colores según antigüedad.
-    
-    - 🟢 Verde: Menos de 1 día (últimas 24 horas)
-    - 🟡 Amarillo: Más de 1 día (>= 1 día y < 2 días)
-    - 🔴 Rojo: Más de 2 días (>= 2 días)
-    - ❌ Sin datos (tabla no existe o no tiene _etl_synced)
+    Formatea la celda completa con: Estatus, Fecha (EST), y Diferenciales.
+    data es un diccionario con: max_sync, actual_rows, last_rows, actual_duration, last_duration, actual_status
     """
-    if ts is None or pd.isna(ts):
-        return "❌"  # Tabla no existe o no tiene datos en _etl_synced
+    if not data or data.get('max_sync') is None or pd.isna(data.get('max_sync')):
+        return "❌"
     
-    # Convertir a datetime si es necesario
-    if isinstance(ts, pd.Timestamp):
-        ts = ts.to_pydatetime()
+    # 1. Procesar Fecha y Icono
+    ts_est = to_est(data['max_sync'])
+    status = data.get('actual_status', '').upper()
     
-    # Calcular hace cuánto tiempo fue la última sincronización
-    try:
-        # Normalizar timezone
-        if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
-            now = datetime.now(ts.tzinfo)
-        else:
-            now = datetime.now()
-            if hasattr(ts, 'tzinfo') and ts.tzinfo is not None:
-                ts = ts.replace(tzinfo=None)
-        
-        time_diff = now - ts
-        days_diff = time_diff.days
-        
-        # Formatear según antigüedad
-        if days_diff >= 2:
-            # Rojo: Más de 2 días (>= 2 días)
-            return f"🔴 {ts.strftime('%m-%d %H:%M')}"
-        elif days_diff >= 1:
-            # Amarillo: Más de 1 día (>= 1 día y < 2 días)
-            return f"🟡 {ts.strftime('%m-%d %H:%M')}"
-        else:
-            # Verde: Menos de 1 día (últimas 24 horas)
-            return f"🟢 {ts.strftime('%m-%d %H:%M')}"
-    except Exception:
-        # Si hay error al formatear, mostrar solo la fecha
-        try:
-            return f"📅 {ts.strftime('%m-%d %H:%M')}"
-        except:
-            return str(ts)
+    # Decidir icono basado en status o antigüedad
+    icon = "⚪"
+    if status == 'SUCCESS':
+        icon = "🟢"
+    elif status == 'FAILED':
+        icon = "🔴"
+    else:
+        # Fallback a lógica de antigüedad si no hay status
+        time_diff = datetime.now(ts_est.tzinfo) - ts_est
+        if time_diff.days >= 2: icon = "🔴"
+        elif time_diff.days >= 1: icon = "🟡"
+        else: icon = "🟢"
+
+    # Línea 1: Icono + Fecha
+    line1 = f"{icon} {ts_est.strftime('%m-%d %H:%M')}"
+    
+    # 2. Procesar Métricas
+    line2_parts = []
+    
+    # Filas (Delta: Actual - Last)
+    if show_rows:
+        act_r = data.get('actual_rows')
+        lst_r = data.get('last_rows')
+        if act_r is not None:
+            if show_delta and lst_r is not None:
+                delta = act_r - lst_r
+                sign = "+" if delta >= 0 else ""
+                line2_parts.append(f"Δ:{sign}{delta}")
+            else:
+                line2_parts.append(f"R:{act_r}")
+    
+    # Duración (Delta: Last - Actual) -> Positivo es bueno (más rápido)
+    if show_duration:
+        act_d = data.get('actual_duration')
+        lst_d = data.get('last_duration')
+        if act_d is not None:
+            label = "τ" # Tau para tiempo
+            if show_delta and lst_d is not None:
+                # Según usuario: Si antes 5.3s y ahora 6.8s -> Diferencial negativo (mal)
+                # Math: 5.3 - 6.8 = -1.5s
+                delta = lst_d - act_d
+                sign = "+" if delta >= 0 else ""
+                # Alerta si es negativo (se tardó más)
+                if delta < 0:
+                    line2_parts.append(f"⚠️{sign}{delta:.1f}s")
+                else:
+                    line2_parts.append(f"{label}:{sign}{delta:.1f}s")
+            else:
+                line2_parts.append(f"{label}:{act_d:.1f}s")
+    
+    line2 = " | ".join(line2_parts)
+    
+    if line2:
+        return f"{line1}\n{line2}"
+    return line1
 
 # ========== INTERFAZ STREAMLIT ==========
 
@@ -485,9 +555,9 @@ st.markdown("""
     
     /* Configuración para que la tabla quepa sin scroll (Vista de Pájaro) */
     [data-testid="stTable"] {overflow: visible !important; display: flex !important; justify-content: center !important;}
-    table {font-size: 0.75rem !important; width: 100% !important;}
-    th {font-size: 0.7rem !important; padding: 0.2rem 0.2rem !important; white-space: nowrap !important; text-align: center !important;}
-    td {padding: 0.2rem 0.2rem !important; white-space: nowrap !important; text-align: center !important;}
+    table {font-size: 0.7rem !important; width: 100% !important; border-collapse: collapse !important;}
+    th {font-size: 0.65rem !important; padding: 0.1rem 0.2rem !important; white-space: nowrap !important; text-align: center !important;}
+    td {padding: 0.1rem 0.2rem !important; white-space: pre-wrap !important; text-align: center !important; line-height: 1.1 !important;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -530,11 +600,19 @@ with st.sidebar:
     st.markdown("##### 🔧 Opciones")
     st.caption(f"Ambiente: **{current_env}**")
     
+    # NUEVOS: Selectores de métricas
+    st.markdown("##### 📊 Visualización")
+    show_rows = st.checkbox("Mostrar Filas (Δ)", value=True)
+    show_duration = st.checkbox("Mostrar Duración (τ)", value=True)
+    show_delta = st.checkbox("Mostrar Diferenciales", value=True, help="Muestra la resta contra la ejecución anterior")
+    
     # Modo debug
     debug_mode = st.checkbox("🔍 Modo Debug", value=False, help="Muestra información detallada de errores cuando aparecen ❌")
     
-    if st.button("🔄 Actualizar Datos", type="primary"):
+    if st.button("🔄 Actualizar Datos (LIVE)", type="primary"):
+        # Al presionar, forzamos limpieza pero el recálculo será paralelo
         st.cache_data.clear()
+        st.session_state['data_source'] = 'live'
         st.rerun()
     
     st.markdown("---")
@@ -560,20 +638,76 @@ with st.sidebar:
     else:
         st.caption(f"✅ {len(tables_list)} tablas de Bronze encontradas")
     
-    # ========== PASO 3-4: CONSTRUIR MATRIZ ==========
-    st.caption("📊 Paso 3-4: Construyendo Matriz...")
+# ========== PROCESAMIENTO E INTERFAZ ==========
 
-# Construir la matriz (las compañías y tablas ya se cargaron en el sidebar)
-matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
+# 1. Decidir origen de datos
+if 'data_source' not in st.session_state:
+    st.session_state['data_source'] = 'snapshot'
+
+# 2. Cargar datos base
+with st.spinner("Cargando matriz..."):
+    if st.session_state['data_source'] == 'live':
+        matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
+        # Convertir a formato dict para el formateador
+        processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
+    else:
+        snapshot_df = get_snapshot_matrix()
+        
+        # Si no hay snapshot, intentar fallback a live o avisar
+        if snapshot_df.empty:
+            st.warning("⚠️ No se encontró tabla de snapshot. Realizando carga LIVE inicial...")
+            matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
+            processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
+        else:
+            # Pivotar el snapshot para tener la misma forma que la matriz
+            # Indices: company_id (mapear a name), Columnas: endpoint_name
+            
+            # Crear mapeo de id a name
+            company_map_id_to_name = dict(zip(companies_df['company_id'], companies_df['company_name']))
+            
+            # Preparar datos para pivot
+            snapshot_df['Compañía'] = snapshot_df['company_id'].map(company_map_id_to_name)
+            
+            # Crear matriz de objetos
+            # Agrupamos por compañía y endpoint
+            pivoted = {}
+            for _, row in snapshot_df.iterrows():
+                comp = row['Compañía']
+                if comp not in pivoted: pivoted[comp] = {}
+                pivoted[comp][row['endpoint_name']] = {
+                    'max_sync': row['max_sync'],
+                    'actual_rows': row['actual_rows'],
+                    'last_rows': row['last_rows'],
+                    'actual_duration': row['actual_duration'],
+                    'last_duration': row['last_duration'],
+                    'actual_status': row['actual_status']
+                }
+            
+            # Convertir a DataFrame asegurando orden de filas y columnas
+            processed_matrix = pd.DataFrame(pivoted).T
+            
+            # Asegurar que todas las columnas y filas existan (aunque estén vacías)
+            for col in tables_list:
+                if col not in processed_matrix.columns:
+                    processed_matrix[col] = None
+            
+            # Ordenar columnas
+            cols = [t for t in tables_list if t in processed_matrix.columns]
+            processed_matrix = processed_matrix[cols]
+            
+            # Ordenar filas por company_id original
+            company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
+            processed_matrix['_sort'] = processed_matrix.index.map(company_id_map)
+            processed_matrix = processed_matrix.sort_values('_sort').drop('_sort', axis=1)
 
 # Mostrar matriz
-st.markdown("**📊 Matriz: Compañías vs Tablas Bronze (MAX(_etl_synced))**")
-st.caption("❌ = Tabla no existe o no tiene datos en _etl_synced")
+st.markdown(f"**📊 Matriz: Compañías vs Tablas Bronze (Origen: {st.session_state['data_source'].upper()})**")
+st.caption("Icono representa el estatus de la última corrida. Δ = Diferencia de filas. τ = Efectividad de tiempo (Positivo es mejor).")
 
 # Crear versión formateada para visualización
-display_df = matrix_df.copy()
+display_df = processed_matrix.copy()
 for col in display_df.columns:
-    display_df[col] = display_df[col].apply(format_timestamp_for_display)
+    display_df[col] = display_df[col].apply(lambda x: format_cell_data(x, show_rows, show_duration, show_delta))
 
 # Mostrar la matriz usando st.table() con CSS personalizado para evitar scroll
 st.table(display_df)
