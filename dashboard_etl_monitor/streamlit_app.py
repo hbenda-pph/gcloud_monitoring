@@ -235,7 +235,7 @@ def get_tables_from_metadata():
         return []
 
 @st.cache_data(ttl=900)  # Cache por 15 minutos para la carga rápida
-def get_snapshot_matrix():
+def get_snapshot_matrix(debug_mode=False):
     """
     Obtiene la última fotografía completa desde la tabla de snapshot.
     """
@@ -262,7 +262,8 @@ def get_snapshot_matrix():
         return df
         
     except Exception as e:
-        # No mostrar error intrusivo si la tabla no existe aún, solo log en terminal/debug
+        if debug_mode:
+            st.error(f"🔍 Error cargando snapshot: {str(e)}")
         return pd.DataFrame()
 
 # ========== PASO 3: OBTENER MAX(_etl_synced) POR TABLA ==========
@@ -651,22 +652,36 @@ with st.spinner("Cargando matriz..."):
         # Convertir a formato dict para el formateador
         processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
     else:
-        snapshot_df = get_snapshot_matrix()
+        snapshot_df = get_snapshot_matrix(debug_mode=debug_mode)
         
         # Si no hay snapshot, intentar fallback a live o avisar
         if snapshot_df.empty:
+            if debug_mode: st.info("Snapshot vacío o no encontrado. Usando modo LIVE.")
             st.warning("⚠️ No se encontró tabla de snapshot. Realizando carga LIVE inicial...")
             matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
             processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
         else:
+            if debug_mode: st.success(f"Snapshot cargado con {len(snapshot_df)} registros.")
             # Pivotar el snapshot para tener la misma forma que la matriz
             # Indices: company_id (mapear a name), Columnas: endpoint_name
+            
+            # Asegurar que los IDs sean del mismo tipo para el map (entero)
+            snapshot_df['company_id'] = pd.to_numeric(snapshot_df['company_id'], errors='coerce')
+            companies_df['company_id'] = pd.to_numeric(companies_df['company_id'], errors='coerce')
             
             # Crear mapeo de id a name
             company_map_id_to_name = dict(zip(companies_df['company_id'], companies_df['company_name']))
             
             # Preparar datos para pivot
             snapshot_df['Compañía'] = snapshot_df['company_id'].map(company_map_id_to_name)
+            
+            # Debug: Ver si hay nulos después del map
+            if debug_mode:
+                mapped_count = snapshot_df['Compañía'].notna().sum()
+                st.info(f"Compañías mapeadas: {mapped_count} de {len(snapshot_df)}")
+                if mapped_count == 0:
+                    st.write("IDs en Snapshot:", snapshot_df['company_id'].unique())
+                    st.write("IDs en Companies:", companies_df['company_id'].unique())
             
             # Crear matriz de objetos
             # Agrupamos por compañía y endpoint
