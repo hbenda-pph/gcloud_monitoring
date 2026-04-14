@@ -677,19 +677,32 @@ with st.spinner("Cargando matriz..."):
             
             # Debug: Ver si hay nulos después del map
             if debug_mode:
+                st.info(f"🔍 Snapshot cargado con {len(snapshot_df)} registros.")
                 mapped_count = snapshot_df['Compañía'].notna().sum()
-                st.info(f"Compañías mapeadas: {mapped_count} de {len(snapshot_df)}")
+                st.info(f"🏢 Compañías mapeadas correctamente: {mapped_count} de {len(snapshot_df)}")
+                
                 if mapped_count == 0:
-                    st.write("IDs en Snapshot:", snapshot_df['company_id'].unique())
-                    st.write("IDs en Companies:", companies_df['company_id'].unique())
+                    st.warning("⚠️ ¡ALERTA! Ninguna compañía del snapshot coincide con las compañías activas.")
+                    st.write("IDs en Snapshot (Primeros 5):", snapshot_df['company_id'].unique()[:5])
+                    st.write("IDs en Catálogo (Primeros 5):", companies_df['company_id'].unique()[:5])
+                
+                with st.expander("📦 Vista previa de datos del Snapshot", expanded=False):
+                    st.write(snapshot_df.head(10))
+            
+            # Normalizar endpoint_name para asegurar cruce (lowercase y strip)
+            snapshot_df['endpoint_key'] = snapshot_df['endpoint_name'].astype(str).str.lower().str.strip()
             
             # Crear matriz de objetos
             # Agrupamos por compañía y endpoint
             pivoted = {}
             for _, row in snapshot_df.iterrows():
                 comp = row['Compañía']
+                if pd.isna(comp): continue # Omitir si no se mapeó la compañía
+                
                 if comp not in pivoted: pivoted[comp] = {}
-                pivoted[comp][row['endpoint_name']] = {
+                
+                # Guardamos usando la llave normalizada
+                pivoted[comp][row['endpoint_key']] = {
                     'max_sync': row['max_sync'],
                     'actual_rows': row['actual_rows'],
                     'last_rows': row['last_rows'],
@@ -698,17 +711,24 @@ with st.spinner("Cargando matriz..."):
                     'actual_status': row['actual_status']
                 }
             
-            # Convertir a DataFrame asegurando orden de filas y columnas
+            # Convertir a DataFrame
             processed_matrix = pd.DataFrame(pivoted).T
             
-            # Asegurar que todas las columnas y filas existan (aunque estén vacías)
-            for col in tables_list:
-                if col not in processed_matrix.columns:
-                    processed_matrix[col] = None
+            # Normalizar tables_list también para la búsqueda
+            normalized_tables = [t.lower().strip() for t in tables_list]
             
-            # Ordenar columnas
-            cols = [t for t in tables_list if t in processed_matrix.columns]
-            processed_matrix = processed_matrix[cols]
+            # Asegurar que todas las columnas existan
+            for col_norm in normalized_tables:
+                if col_norm not in processed_matrix.columns:
+                    processed_matrix[col_norm] = None
+            
+            # Ordenar columnas usando la lista original (normalizada)
+            processed_matrix = processed_matrix[[c for c in normalized_tables if c in processed_matrix.columns]]
+            
+            # Restaurar nombres originales de columnas si es posible o mantener normalizados
+            # Para el dashboard es mejor mantener los nombres de metadata originales
+            name_map = {t.lower().strip(): t for t in tables_list}
+            processed_matrix = processed_matrix.rename(columns=name_map)
             
             # Ordenar filas por company_id original
             company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
