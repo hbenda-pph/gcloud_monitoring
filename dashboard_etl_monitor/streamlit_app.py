@@ -156,9 +156,9 @@ def get_bigquery_client(project_id):
     """
     return bigquery.Client(project=project_id)
 
-def to_est(ts):
+def to_cdmx(ts):
     """
-    Convierte un timestamp (aware o naive) a la zona horaria EST (America/New_York).
+    Convierte un timestamp (aware o naive) a la zona horaria de Ciudad de México (America/Mexico_City).
     """
     if ts is None or pd.isna(ts):
         return None
@@ -167,9 +167,9 @@ def to_est(ts):
     if ts.tzinfo is None:
         ts = pytz.utc.localize(ts)
     
-    # Convertir a EST
-    est = pytz.timezone('America/New_York')
-    return ts.astimezone(est)
+    # Convertir a Ciudad de México
+    cdmx = pytz.timezone('America/Mexico_City')
+    return ts.astimezone(cdmx)
 
 # ========== PASO 1: OBTENER COMPAÑÍAS ==========
 
@@ -263,7 +263,9 @@ def get_snapshot_matrix(debug_mode=False):
         
     except Exception as e:
         if debug_mode:
-            st.error(f"🔍 Error cargando snapshot: {str(e)}")
+            st.error(f"🔍 Error en BigQuery (Snapshot): {type(e).__name__} - {str(e)}")
+            # Mostrar la query para verificar el path de la tabla
+            st.code(query, language="sql")
         return pd.DataFrame()
 
 # ========== PASO 3: OBTENER MAX(_etl_synced) POR TABLA ==========
@@ -654,86 +656,74 @@ with st.spinner("Cargando matriz..."):
     else:
         snapshot_df = get_snapshot_matrix(debug_mode=debug_mode)
         
-        # Si no hay snapshot, intentar fallback a live o avisar
+        # Validar si el snapshot tiene datos
         if snapshot_df.empty:
-            if debug_mode: st.info("Snapshot vacío o no encontrado. Usando modo LIVE.")
-            st.warning("⚠️ No se encontró tabla de snapshot. Realizando carga LIVE inicial...")
+            st.warning("⚠️ No se encontraron registros en la tabla de snapshot. Realizando carga LIVE...")
             matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
             processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
         else:
-            if debug_mode: st.success(f"Snapshot cargado con {len(snapshot_df)} registros.")
-            # Pivotar el snapshot para tener la misma forma que la matriz
-            # Indices: company_id (mapear a name), Columnas: endpoint_name
+            # NORMALIZACIÓN ROBUSTA DE IDs (Convertir a String y quitar .0 si existe)
+            snapshot_df['id_clean'] = snapshot_df['company_id'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            companies_df['id_clean'] = companies_df['company_id'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
             
-            # Asegurar que los IDs sean del mismo tipo para el map (entero)
-            snapshot_df['company_id'] = pd.to_numeric(snapshot_df['company_id'], errors='coerce')
-            companies_df['company_id'] = pd.to_numeric(companies_df['company_id'], errors='coerce')
+            # Crear mapeo
+            id_to_name = dict(zip(companies_df['id_clean'], companies_df['company_name']))
             
-            # Crear mapeo de id a name
-            company_map_id_to_name = dict(zip(companies_df['company_id'], companies_df['company_name']))
+            # Mapear compañías
+            snapshot_df['Compañía'] = snapshot_df['id_clean'].map(id_to_name)
             
-            # Preparar datos para pivot
-            snapshot_df['Compañía'] = snapshot_df['company_id'].map(company_map_id_to_name)
+            # Contar coincidencias
+            mapped_rows = snapshot_df[snapshot_df['Compañía'].notna()].copy()
             
-            # Debug: Ver si hay nulos después del map
-            if debug_mode:
-                st.info(f"🔍 Snapshot cargado con {len(snapshot_df)} registros.")
-                mapped_count = snapshot_df['Compañía'].notna().sum()
-                st.info(f"🏢 Compañías mapeadas correctamente: {mapped_count} de {len(snapshot_df)}")
+            if len(mapped_rows) == 0:
+                st.error("❌ Error de Mapeo Crítico: Ningún ID del Snapshot coincide con las compañías activas.")
+                if debug_mode:
+                    st.write("IDs en Snapshot (Clean):", snapshot_df['id_clean'].unique())
+                    st.write("IDs en Catálogo (Clean):", companies_df['id_clean'].unique())
                 
-                if mapped_count == 0:
-                    st.warning("⚠️ ¡ALERTA! Ninguna compañía del snapshot coincide con las compañías activas.")
-                    st.write("IDs en Snapshot (Primeros 5):", snapshot_df['company_id'].unique()[:5])
-                    st.write("IDs en Catálogo (Primeros 5):", companies_df['company_id'].unique()[:5])
+                st.info("💡 Cambiando automáticamente a modo LIVE para obtener datos frescos...")
+                matrix_df = build_sync_matrix(companies_df, tables_list, debug_mode=debug_mode)
+                processed_matrix = matrix_df.applymap(lambda x: {'max_sync': x})
+            else:
+                if debug_mode:
+                    st.success(f"✅ Snapshot vinculado: {len(mapped_rows)} registros coinciden con compañías.")
+                    with st.expander("📦 Vista previa datos Snapshot vinculados", expanded=False):
+                        st.write(mapped_rows.head(20))
                 
-                with st.expander("📦 Vista previa de datos del Snapshot", expanded=False):
-                    st.write(snapshot_df.head(10))
-            
-            # Normalizar endpoint_name para asegurar cruce (lowercase y strip)
-            snapshot_df['endpoint_key'] = snapshot_df['endpoint_name'].astype(str).str.lower().str.strip()
-            
-            # Crear matriz de objetos
-            # Agrupamos por compañía y endpoint
-            pivoted = {}
-            for _, row in snapshot_df.iterrows():
-                comp = row['Compañía']
-                if pd.isna(comp): continue # Omitir si no se mapeó la compañía
+                # Normalizar endpoint_name para asegurar cruce (lowercase y strip)
+                mapped_rows['endpoint_key'] = mapped_rows['endpoint_name'].astype(str).str.lower().str.strip()
                 
-                if comp not in pivoted: pivoted[comp] = {}
+                # Generar matriz
+                pivoted = {}
+                for _, row in mapped_rows.iterrows():
+                    comp = row['Compañía']
+                    if comp not in pivoted: pivoted[comp] = {}
+                    pivoted[comp][row['endpoint_key']] = {
+                        'max_sync': row['max_sync'],
+                        'actual_rows': row['actual_rows'],
+                        'last_rows': row['last_rows'],
+                        'actual_duration': row['actual_duration'],
+                        'last_duration': row['last_duration'],
+                        'actual_status': row['actual_status']
+                    }
                 
-                # Guardamos usando la llave normalizada
-                pivoted[comp][row['endpoint_key']] = {
-                    'max_sync': row['max_sync'],
-                    'actual_rows': row['actual_rows'],
-                    'last_rows': row['last_rows'],
-                    'actual_duration': row['actual_duration'],
-                    'last_duration': row['last_duration'],
-                    'actual_status': row['actual_status']
-                }
-            
-            # Convertir a DataFrame
-            processed_matrix = pd.DataFrame(pivoted).T
-            
-            # Normalizar tables_list también para la búsqueda
-            normalized_tables = [t.lower().strip() for t in tables_list]
-            
-            # Asegurar que todas las columnas existan
-            for col_norm in normalized_tables:
-                if col_norm not in processed_matrix.columns:
-                    processed_matrix[col_norm] = None
-            
-            # Ordenar columnas usando la lista original (normalizada)
-            processed_matrix = processed_matrix[[c for c in normalized_tables if c in processed_matrix.columns]]
-            
-            # Restaurar nombres originales de columnas si es posible o mantener normalizados
-            # Para el dashboard es mejor mantener los nombres de metadata originales
-            name_map = {t.lower().strip(): t for t in tables_list}
-            processed_matrix = processed_matrix.rename(columns=name_map)
-            
-            # Ordenar filas por company_id original
-            company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
-            processed_matrix['_sort'] = processed_matrix.index.map(company_id_map)
-            processed_matrix = processed_matrix.sort_values('_sort').drop('_sort', axis=1)
+                processed_matrix = pd.DataFrame(pivoted).T
+                
+                # Normalizar tablas de metadata para el cruce
+                normalized_tables = [t.lower().strip() for t in tables_list]
+                for col_norm in normalized_tables:
+                    if col_norm not in processed_matrix.columns:
+                        processed_matrix[col_norm] = None
+                
+                # Ordenar y Renombrar columnas
+                processed_matrix = processed_matrix[[c for c in normalized_tables if c in processed_matrix.columns]]
+                name_map = {t.lower().strip(): t for t in tables_list}
+                processed_matrix = processed_matrix.rename(columns=name_map)
+                
+                # Ordenar filas
+                company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
+                processed_matrix['_sort'] = processed_matrix.index.map(company_id_map)
+                processed_matrix = processed_matrix.sort_values('_sort').drop('_sort', axis=1)
 
 # Mostrar matriz
 st.markdown(f"**📊 Matriz: Compañías vs Tablas Bronze (Origen: {st.session_state['data_source'].upper()})**")
