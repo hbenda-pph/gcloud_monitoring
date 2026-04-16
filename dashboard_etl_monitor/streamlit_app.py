@@ -715,8 +715,15 @@ with st.spinner("Cargando matriz..."):
                     with st.expander("📦 Vista previa datos Snapshot vinculados", expanded=False):
                         st.write(mapped_rows.head(20))
                 
-                # Normalizar endpoint_name para asegurar cruce (lowercase y strip)
-                mapped_rows['endpoint_key'] = mapped_rows['endpoint_name'].astype(str).str.lower().str.strip()
+                # Normalizar endpoint_name: lowercase, strip, y guiones → guiones_bajos
+                # La tabla snapshot usa 'business-units', metadata usa 'business_units'
+                mapped_rows['endpoint_key'] = (
+                    mapped_rows['endpoint_name']
+                    .astype(str)
+                    .str.lower()
+                    .str.strip()
+                    .str.replace('-', '_', regex=False)
+                )
                 
                 # Generar matriz
                 pivoted = {}
