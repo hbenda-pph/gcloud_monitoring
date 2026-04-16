@@ -481,7 +481,7 @@ def format_cell_data(data, show_rows=True, show_duration=True, show_delta=True):
     Formatea la celda completa con: Estatus, Fecha (EST), y Diferenciales.
     data es un diccionario con: max_sync, actual_rows, last_rows, actual_duration, last_duration, actual_status
     """
-    if not data or data.get('max_sync') is None or pd.isna(data.get('max_sync')):
+    if not isinstance(data, dict) or data.get('max_sync') is None or pd.isna(data.get('max_sync')):
         return "❌"
     
     # 1. Procesar Fecha y Icono
