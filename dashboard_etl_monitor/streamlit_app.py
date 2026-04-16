@@ -205,45 +205,32 @@ def get_companies():
 # ========== PASO 2: OBTENER TABLAS ==========
 
 @st.cache_data(ttl=3600)  # Cache por 1 hora (metadata cambia poco)
-def get_tables_metadata():
+def get_tables_from_metadata():
     """
-    Obtiene el mapeo de endpoints a nombres de tablas desde metadata.
+    Obtiene la lista de endpoint.name activos desde metadata.
+    Estos son los que el ETL procesa y monitorea.
     
     Retorna:
-        dict: {endpoint_normalized: table_name}
-        list: [table_names] ordenadas
+        list: [endpoint_name, ...] ordenados alfabéticamente
     """
     try:
         client = get_bigquery_client(METADATA_PROJECT)
         
         query = f"""
             SELECT 
-                table_name,
-                endpoint
+                endpoint.name AS endpoint_name
             FROM `{METADATA_PROJECT}.{METADATA_DATASET}.{METADATA_TABLE}`
-            WHERE endpoint IS NOT NULL
+            WHERE endpoint.name IS NOT NULL
               AND active = TRUE
-              AND silver_use_bronze = TRUE
-            ORDER BY table_name
+            ORDER BY endpoint.name
         """
         
         df = client.query(query).to_dataframe()
-        
-        # Crear mapeo: endpoint (normalizado) -> table_name
-        # Normalizamos el endpoint del mismo modo que el snapshot
-        mapping = {}
-        for _, row in df.iterrows():
-            if row['endpoint']:
-                key = str(row['endpoint']).lower().strip().replace('-', '_')
-                mapping[key] = row['table_name']
-        
-        tables = df['table_name'].tolist()
-        
-        return mapping, tables
+        return sorted(df['endpoint_name'].tolist())
         
     except Exception as e:
-        st.error(f"❌ Error obteniendo metadata de tablas: {str(e)}")
-        return {}, []
+        st.error(f"❌ Error obteniendo endpoints desde metadata: {str(e)}")
+        return []
 
 @st.cache_data(ttl=900)  # Cache por 15 minutos para la carga rápida
 def get_snapshot_matrix(debug_mode=False):
@@ -667,15 +654,15 @@ with st.sidebar:
     else:
         st.caption(f"✅ {len(companies_df)} compañías encontradas")
     
-    # ========== PASO 2: CARGAR TABLAS ==========
-    st.caption("📋 Paso 2: Cargando Tablas desde Metadata...")
-    endpoint_mapping, tables_list = get_tables_metadata()
+    # ========== PASO 2: CARGAR ENDPOINTS ==========
+    st.caption("📋 Paso 2: Cargando Endpoints desde Metadata...")
+    tables_list = get_tables_from_metadata()  # Lista de endpoint.name
     
     if not tables_list:
-        st.caption("❌ No se encontraron tablas en metadata")
+        st.caption("❌ No se encontraron endpoints en metadata")
         st.stop()
     else:
-        st.caption(f"✅ {len(tables_list)} tablas de Bronze encontradas")
+        st.caption(f"✅ {len(tables_list)} endpoints encontrados en metadata")
     
 # ========== PROCESAMIENTO E INTERFAZ ==========
 
@@ -726,48 +713,44 @@ with st.spinner("Cargando matriz..."):
                     with st.expander("📦 Vista previa datos Snapshot vinculados", expanded=False):
                         st.write(mapped_rows.head(20))
                 
-                # Normalizar endpoint_name: lowercase, strip, y guiones → guiones_bajos
-                # La tabla snapshot usa 'business-units', metadata usa 'business_units'
-                mapped_rows['endpoint_key'] = (
+                # Normalizar endpoint_name del snapshot (lowercase + strip)
+                # El snapshot guarda directamente el endpoint.name del proceso ETL
+                mapped_rows['ep_key'] = (
                     mapped_rows['endpoint_name']
                     .astype(str)
                     .str.lower()
                     .str.strip()
-                    .str.replace('-', '_', regex=False)
                 )
                 
-                # Generar matriz usando el mapeo de metadata
+                # Generar matriz usando endpoint_name directamente como columna
                 pivoted = {}
                 for _, row in mapped_rows.iterrows():
                     comp = row['Compañía']
+                    ep = row['ep_key']
+                    if not ep: continue
                     if comp not in pivoted: pivoted[comp] = {}
-                    
-                    # BUSCAR NOMBRE REAL DE LA TABLA USANDO EL ENDPOINT
-                    ep_key = row['endpoint_key']
-                    target_table = endpoint_mapping.get(ep_key)
-                    
-                    if target_table:
-                        pivoted[comp][target_table] = {
-                            'max_sync': row['max_sync'],
-                            'actual_rows': row['actual_rows'],
-                            'last_rows': row['last_rows'],
-                            'actual_duration': row['actual_duration'],
-                            'last_duration': row['last_duration'],
-                            'actual_status': row['actual_status']
-                        }
-                    elif debug_mode:
-                        st.warning(f"⚠️ Endpoint '{ep_key}' no encontrado en mapeo de metadata")
+                    pivoted[comp][ep] = {
+                        'max_sync': row['max_sync'],
+                        'actual_rows': row['actual_rows'],
+                        'last_rows': row['last_rows'],
+                        'actual_duration': row['actual_duration'],
+                        'last_duration': row['last_duration'],
+                        'actual_status': row['actual_status']
+                    }
                 
                 processed_matrix = pd.DataFrame(pivoted).T
                 
-                # Asegurar que todas las columnas de metadata existan en la matriz
-                for table in tables_list:
-                    if table not in processed_matrix.columns:
-                        processed_matrix[table] = None
+                # Columnas: unión de endpoints del snapshot + endpoints de metadata
+                # Ambos ya normalizados (lowercase)
+                metadata_eps = sorted([e.lower().strip() for e in tables_list])
+                snapshot_eps = sorted(processed_matrix.columns.tolist())
+                all_cols = sorted(set(metadata_eps) | set(snapshot_eps))
                 
-                # Ordenar columnas según metadata
-                valid_cols = [t for t in tables_list if t in processed_matrix.columns]
-                processed_matrix = processed_matrix[valid_cols]
+                for col in all_cols:
+                    if col not in processed_matrix.columns:
+                        processed_matrix[col] = None
+                
+                processed_matrix = processed_matrix[all_cols]
                 
                 # Ordenar filas por company_id
                 company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
