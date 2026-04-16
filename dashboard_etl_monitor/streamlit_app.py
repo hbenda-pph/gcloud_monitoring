@@ -240,8 +240,10 @@ def get_snapshot_matrix(debug_mode=False):
     Obtiene la última fotografía completa desde la tabla de snapshot.
     """
     try:
-        PROJECT_ID = get_bigquery_project_id()
-        client = get_bigquery_client(PROJECT_ID)
+        # CORREGIDO: Usar METADATA_PROJECT (pph-central), igual que get_tables_from_metadata
+        # Antes usaba get_bigquery_project_id() que devuelve el proyecto del ambiente (ej: platform-partners-des)
+        # y si ese proyecto no tiene permisos sobre pph-central, falla silenciosamente.
+        client = get_bigquery_client(METADATA_PROJECT)
         
         query = f"""
             SELECT 
@@ -619,7 +621,30 @@ with st.sidebar:
         st.rerun()
     
     st.markdown("---")
+    
+    # DIAGNÓSTICO DIRECTO - Para depurar el problema de X
+    with st.expander("🩺 Diagnóstico Snapshot", expanded=False):
+        if st.button("🔎 Ver datos crudos del Snapshot"):
+            try:
+                diag_client = bigquery.Client(project=METADATA_PROJECT)
+                diag_query = f"""
+                    SELECT company_id, endpoint_name, max_sync, actual_status
+                    FROM `{METADATA_PROJECT}.{METADATA_DATASET}.etl_monitoring_snapshot`
+                    LIMIT 20
+                """
+                diag_df = diag_client.query(diag_query).to_dataframe()
+                if diag_df.empty:
+                    st.error("❌ La tabla etl_monitoring_snapshot está VACÍA")
+                else:
+                    st.success(f"✅ {len(diag_df)} registros encontrados")
+                    st.write(diag_df)
+                    st.write("**company_id dtype:**", diag_df['company_id'].dtype)
+                    st.write("**max_sync nulos:**", diag_df['max_sync'].isna().sum())
+            except Exception as e:
+                st.error(f"Error: {type(e).__name__}: {str(e)}")
+    
     st.markdown("##### 📋 Logs")
+
     
     # ========== PASO 1: CARGAR COMPAÑÍAS ==========
     st.caption("📋 Paso 1: Cargando Compañías...")
