@@ -205,19 +205,21 @@ def get_companies():
 # ========== PASO 2: OBTENER TABLAS ==========
 
 @st.cache_data(ttl=3600)  # Cache por 1 hora (metadata cambia poco)
-def get_tables_from_metadata():
+def get_tables_metadata():
     """
-    Obtiene todas las tablas de Bronze desde metadata.
+    Obtiene el mapeo de endpoints a nombres de tablas desde metadata.
     
     Retorna:
-        Lista de nombres de tablas ordenadas
+        dict: {endpoint_normalized: table_name}
+        list: [table_names] ordenadas
     """
     try:
         client = get_bigquery_client(METADATA_PROJECT)
         
         query = f"""
             SELECT 
-                table_name
+                table_name,
+                endpoint
             FROM `{METADATA_PROJECT}.{METADATA_DATASET}.{METADATA_TABLE}`
             WHERE endpoint IS NOT NULL
               AND active = TRUE
@@ -226,13 +228,22 @@ def get_tables_from_metadata():
         """
         
         df = client.query(query).to_dataframe()
+        
+        # Crear mapeo: endpoint (normalizado) -> table_name
+        # Normalizamos el endpoint del mismo modo que el snapshot
+        mapping = {}
+        for _, row in df.iterrows():
+            if row['endpoint']:
+                key = str(row['endpoint']).lower().strip().replace('-', '_')
+                mapping[key] = row['table_name']
+        
         tables = df['table_name'].tolist()
         
-        return tables
+        return mapping, tables
         
     except Exception as e:
-        st.error(f"❌ Error obteniendo tablas desde metadata: {str(e)}")
-        return []
+        st.error(f"❌ Error obteniendo metadata de tablas: {str(e)}")
+        return {}, []
 
 @st.cache_data(ttl=900)  # Cache por 15 minutos para la carga rápida
 def get_snapshot_matrix(debug_mode=False):
@@ -658,7 +669,7 @@ with st.sidebar:
     
     # ========== PASO 2: CARGAR TABLAS ==========
     st.caption("📋 Paso 2: Cargando Tablas desde Metadata...")
-    tables_list = get_tables_from_metadata()
+    endpoint_mapping, tables_list = get_tables_metadata()
     
     if not tables_list:
         st.caption("❌ No se encontraron tablas en metadata")
@@ -725,34 +736,40 @@ with st.spinner("Cargando matriz..."):
                     .str.replace('-', '_', regex=False)
                 )
                 
-                # Generar matriz
+                # Generar matriz usando el mapeo de metadata
                 pivoted = {}
                 for _, row in mapped_rows.iterrows():
                     comp = row['Compañía']
                     if comp not in pivoted: pivoted[comp] = {}
-                    pivoted[comp][row['endpoint_key']] = {
-                        'max_sync': row['max_sync'],
-                        'actual_rows': row['actual_rows'],
-                        'last_rows': row['last_rows'],
-                        'actual_duration': row['actual_duration'],
-                        'last_duration': row['last_duration'],
-                        'actual_status': row['actual_status']
-                    }
+                    
+                    # BUSCAR NOMBRE REAL DE LA TABLA USANDO EL ENDPOINT
+                    ep_key = row['endpoint_key']
+                    target_table = endpoint_mapping.get(ep_key)
+                    
+                    if target_table:
+                        pivoted[comp][target_table] = {
+                            'max_sync': row['max_sync'],
+                            'actual_rows': row['actual_rows'],
+                            'last_rows': row['last_rows'],
+                            'actual_duration': row['actual_duration'],
+                            'last_duration': row['last_duration'],
+                            'actual_status': row['actual_status']
+                        }
+                    elif debug_mode:
+                        st.warning(f"⚠️ Endpoint '{ep_key}' no encontrado en mapeo de metadata")
                 
                 processed_matrix = pd.DataFrame(pivoted).T
                 
-                # Normalizar tablas de metadata para el cruce
-                normalized_tables = [t.lower().strip() for t in tables_list]
-                for col_norm in normalized_tables:
-                    if col_norm not in processed_matrix.columns:
-                        processed_matrix[col_norm] = None
+                # Asegurar que todas las columnas de metadata existan en la matriz
+                for table in tables_list:
+                    if table not in processed_matrix.columns:
+                        processed_matrix[table] = None
                 
-                # Ordenar y Renombrar columnas
-                processed_matrix = processed_matrix[[c for c in normalized_tables if c in processed_matrix.columns]]
-                name_map = {t.lower().strip(): t for t in tables_list}
-                processed_matrix = processed_matrix.rename(columns=name_map)
+                # Ordenar columnas según metadata
+                valid_cols = [t for t in tables_list if t in processed_matrix.columns]
+                processed_matrix = processed_matrix[valid_cols]
                 
-                # Ordenar filas
+                # Ordenar filas por company_id
                 company_id_map = dict(zip(companies_df['company_name'], companies_df['company_id']))
                 processed_matrix['_sort'] = processed_matrix.index.map(company_id_map)
                 processed_matrix = processed_matrix.sort_values('_sort').drop('_sort', axis=1)
