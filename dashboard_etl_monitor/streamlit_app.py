@@ -483,7 +483,7 @@ def format_cell_data(data, show_rows=True, show_duration=True, show_delta=True):
         return "❌"
     
     # 1. Procesar Fecha y Icono
-    ts_est = to_est(data['max_sync'])
+    ts_est = to_cdmx(data['max_sync'])
     status = data.get('actual_status', '').upper()
     
     # Decidir icono basado en status o antigüedad
