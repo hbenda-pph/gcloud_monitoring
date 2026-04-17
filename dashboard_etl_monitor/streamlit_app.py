@@ -476,71 +476,50 @@ def build_sync_matrix(companies_df, tables_list, debug_mode=False):
 
 def format_cell_data(data, show_rows=True, show_duration=True, show_delta=True):
     """
-    Formatea la celda completa con: Estatus, Fecha (EST), y Diferenciales.
-    data es un diccionario con: max_sync, actual_rows, last_rows, actual_duration, last_duration, actual_status
+    Formatea la celda:
+      Línea 1: 🟢 04-16 14:30   (icono + fecha en CDMX)
+      Línea 2: Δ:+150 | τ:+2s  (métricas, solo si hay datos reales)
     """
     if not isinstance(data, dict) or data.get('max_sync') is None or pd.isna(data.get('max_sync')):
         return "❌"
     
-    # 1. Procesar Fecha y Icono
-    ts_est = to_cdmx(data['max_sync'])
-    status = data.get('actual_status', '').upper()
+    # Línea 1: Icono + Fecha
+    ts = to_cdmx(data['max_sync'])
+    sts = data.get('actual_status')
+    status = str(sts).upper() if not pd.isna(sts) else ''
     
-    # Decidir icono basado en status o antigüedad
-    icon = "⚪"
     if status == 'SUCCESS':
         icon = "🟢"
     elif status == 'FAILED':
         icon = "🔴"
     else:
-        # Fallback a lógica de antigüedad si no hay status
-        time_diff = datetime.now(ts_est.tzinfo) - ts_est
-        if time_diff.days >= 2: icon = "🔴"
-        elif time_diff.days >= 1: icon = "🟡"
-        else: icon = "🟢"
-
-    # Línea 1: Icono + Fecha
-    line1 = f"{icon} {ts_est.strftime('%m-%d %H:%M')}"
+        diff = datetime.now(ts.tzinfo) - ts
+        icon = "🔴" if diff.days >= 2 else ("🟡" if diff.days >= 1 else "🟢")
     
-    # 2. Procesar Métricas
-    line2_parts = []
+    line1 = f"{icon} {ts.strftime('%m-%d %H:%M')}"
     
-    # Filas (Delta: Actual - Last)
-    if show_rows:
-        act_r = data.get('actual_rows')
-        lst_r = data.get('last_rows')
-        if act_r is not None:
-            if show_delta and lst_r is not None:
-                delta = act_r - lst_r
-                sign = "+" if delta >= 0 else ""
-                line2_parts.append(f"Δ:{sign}{delta}")
-            else:
-                line2_parts.append(f"R:{act_r}")
+    # Línea 2: métricas (solo si hay datos reales, excluyendo Null, NaN, pd.NA)
+    parts = []
     
-    # Duración (Delta: Last - Actual) -> Positivo es bueno (más rápido)
-    if show_duration:
-        act_d = data.get('actual_duration')
-        lst_d = data.get('last_duration')
-        if act_d is not None:
-            label = "τ" # Tau para tiempo
-            if show_delta and lst_d is not None:
-                # Según usuario: Si antes 5.3s y ahora 6.8s -> Diferencial negativo (mal)
-                # Math: 5.3 - 6.8 = -1.5s
-                delta = lst_d - act_d
-                sign = "+" if delta >= 0 else ""
-                # Alerta si es negativo (se tardó más)
-                if delta < 0:
-                    line2_parts.append(f"⚠️{sign}{delta:.1f}s")
-                else:
-                    line2_parts.append(f"{label}:{sign}{delta:.1f}s")
-            else:
-                line2_parts.append(f"{label}:{act_d:.1f}s")
+    act_r = data.get('actual_rows')
+    lst_r = data.get('last_rows')
+    if show_rows and not pd.isna(act_r):
+        if show_delta and not pd.isna(lst_r):
+            d = int(act_r) - int(lst_r)
+            parts.append(f"Δ:{'+' if d >= 0 else ''}{d}")
+        else:
+            parts.append(f"R:{int(act_r)}")
     
-    line2 = " | ".join(line2_parts)
+    act_d = data.get('actual_duration')
+    lst_d = data.get('last_duration')
+    if show_duration and not pd.isna(act_d):
+        if show_delta and not pd.isna(lst_d):
+            d = float(lst_d) - float(act_d)
+            parts.append(f"{'⚠️' if d < 0 else 'τ:'}{'+' if d >= 0 else ''}{d:.1f}s")
+        else:
+            parts.append(f"τ:{float(act_d):.1f}s")
     
-    if line2:
-        return f"{line1}\n{line2}"
-    return line1
+    return f"{line1}\n{' | '.join(parts)}" if parts else line1
 
 # ========== INTERFAZ STREAMLIT ==========
 
